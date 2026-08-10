@@ -1,0 +1,12 @@
+{% extends "ledger/base.html" %}
+{% load django_bootstrap5 %}
+{% block title %}{% if object %}Edit category{% else %}New category{% endif %} — Cash{% endblock %}
+{% block content %}
+<h1 class="mb-4">{% if object %}Edit category{% else %}New category{% endif %}</h1>
+<form method="post">
+    {% csrf_token %}
+    {% bootstrap_form form %}
+    {% bootstrap_button "Save" button_type="submit" button_class="btn-primary" %}
+    <a href="{% url 'ledger:category_list' %}" class="btn btn-outline-secondary">Cancel</a>
+</form>
+{% endblock %}

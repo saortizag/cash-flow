@@ -1,0 +1,11 @@
+{% extends "ledger/base.html" %}
+{% block title %}Delete transaction — Cash{% endblock %}
+{% block content %}
+<h1 class="mb-4">Delete transaction</h1>
+<p>Delete the {{ transaction.due_date }} {{ transaction.get_direction_display }} of {{ transaction.amount }} on {{ transaction.account.name }}?</p>
+<form method="post">
+    {% csrf_token %}
+    <button type="submit" class="btn btn-danger">Delete</button>
+    <a href="{% url 'ledger:transaction_list' %}" class="btn btn-outline-secondary">Cancel</a>
+</form>
+{% endblock %}

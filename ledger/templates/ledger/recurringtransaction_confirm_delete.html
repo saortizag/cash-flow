@@ -1,0 +1,14 @@
+{% extends "ledger/base.html" %}
+{% block title %}Delete recurring transaction — Cash{% endblock %}
+{% block content %}
+<h1 class="mb-4">Delete recurring transaction</h1>
+<p>
+    Delete the "{{ recurring.description|default:"untitled" }}" template? Future, not-yet-executed
+    occurrences will be removed. Already-executed and overdue occurrences will keep their history.
+</p>
+<form method="post">
+    {% csrf_token %}
+    <button type="submit" class="btn btn-danger">Delete</button>
+    <a href="{% url 'ledger:recurring_list' %}" class="btn btn-outline-secondary">Cancel</a>
+</form>
+{% endblock %}

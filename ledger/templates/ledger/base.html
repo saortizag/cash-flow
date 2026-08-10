@@ -1,0 +1,44 @@
+{% load django_bootstrap5 %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}Cash{% endblock %}</title>
+    {% bootstrap_css %}
+    {% block extra_head %}{% endblock %}
+</head>
+<body>
+{% if user.is_authenticated %}
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
+    <div class="container">
+        <a class="navbar-brand" href="{% url 'ledger:dashboard' %}">Cash</a>
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navMain">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navMain">
+            <ul class="navbar-nav me-auto">
+                <li class="nav-item"><a class="nav-link" href="{% url 'ledger:dashboard' %}">Dashboard</a></li>
+                <li class="nav-item"><a class="nav-link" href="{% url 'ledger:account_list' %}">Accounts</a></li>
+                <li class="nav-item"><a class="nav-link" href="{% url 'ledger:category_list' %}">Categories</a></li>
+                <li class="nav-item"><a class="nav-link" href="{% url 'ledger:transaction_list' %}">Transactions</a></li>
+                <li class="nav-item"><a class="nav-link" href="{% url 'ledger:recurring_list' %}">Recurring</a></li>
+                <li class="nav-item"><a class="nav-link" href="{% url 'ledger:projection' %}">Projection</a></li>
+            </ul>
+            <form method="post" action="{% url 'logout' %}" class="d-flex">
+                {% csrf_token %}
+                <span class="navbar-text text-light me-2">{{ user.username }}</span>
+                <button type="submit" class="btn btn-outline-light btn-sm">Log out</button>
+            </form>
+        </div>
+    </div>
+</nav>
+{% endif %}
+<div class="container mb-5">
+    {% bootstrap_messages %}
+    {% block content %}{% endblock %}
+</div>
+{% bootstrap_javascript %}
+{% block extra_body %}{% endblock %}
+</body>
+</html>

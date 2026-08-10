@@ -1,0 +1,26 @@
+{% load django_bootstrap5 %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Log in — Cash</title>
+    {% bootstrap_css %}
+</head>
+<body class="bg-light">
+<div class="container" style="max-width: 400px; margin-top: 8rem;">
+    <div class="card shadow-sm">
+        <div class="card-body">
+            <h1 class="h4 mb-3 text-center">Cash</h1>
+            {% bootstrap_messages %}
+            <form method="post">
+                {% csrf_token %}
+                {% bootstrap_form form %}
+                {% bootstrap_button "Log in" button_type="submit" button_class="btn-primary w-100" %}
+            </form>
+        </div>
+    </div>
+</div>
+{% bootstrap_javascript %}
+</body>
+</html>

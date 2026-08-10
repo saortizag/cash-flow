@@ -1,0 +1,15 @@
+{% extends "ledger/base.html" %}
+{% load django_bootstrap5 %}
+{% block title %}{% if transaction %}Edit transaction{% else %}New transaction{% endif %} — Cash{% endblock %}
+{% block content %}
+<h1 class="mb-4">{% if transaction %}Edit transaction{% else %}New transaction{% endif %}</h1>
+{% if transaction.executed %}
+    <div class="alert alert-info">This transaction is executed — only category, description, and due date can be changed. Un-execute it first to change account, direction, or amount.</div>
+{% endif %}
+<form method="post">
+    {% csrf_token %}
+    {% bootstrap_form form %}
+    {% bootstrap_button "Save" button_type="submit" button_class="btn-primary" %}
+    <a href="{% url 'ledger:transaction_list' %}" class="btn btn-outline-secondary">Cancel</a>
+</form>
+{% endblock %}

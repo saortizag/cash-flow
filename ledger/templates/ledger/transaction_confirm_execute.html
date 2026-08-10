@@ -1,0 +1,17 @@
+{% extends "ledger/base.html" %}
+{% load django_bootstrap5 %}
+{% block title %}Execute transaction — Cash{% endblock %}
+{% block content %}
+<h1 class="mb-4">Execute transaction</h1>
+<p>
+    Executing the {{ transaction.due_date }} {{ transaction.get_direction_display }} of {{ transaction.amount }}
+    will {% if transaction.direction == 'OUT' %}subtract from{% else %}add to{% endif %}
+    <strong>{{ transaction.account.name }}</strong>'s balance (currently {{ transaction.account.current_balance }}).
+</p>
+<form method="post">
+    {% csrf_token %}
+    {% bootstrap_form form %}
+    {% bootstrap_button "Execute" button_type="submit" button_class="btn-success" %}
+    <a href="{% url 'ledger:transaction_list' %}" class="btn btn-outline-secondary">Cancel</a>
+</form>
+{% endblock %}

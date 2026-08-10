@@ -1,0 +1,79 @@
+{% extends "ledger/base.html" %}
+{% block title %}Dashboard — Cash{% endblock %}
+{% block content %}
+<h1 class="mb-4">Dashboard</h1>
+
+<div class="row mb-4">
+    <div class="col-md-4">
+        <div class="card text-bg-primary">
+            <div class="card-body">
+                <h6 class="card-subtitle mb-1">Total balance</h6>
+                <p class="card-text fs-3 mb-0">{{ total_balance }}</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-md-6">
+        <h5>Accounts</h5>
+        <table class="table table-sm">
+            <thead><tr><th>Name</th><th>Type</th><th class="text-end">Balance</th></tr></thead>
+            <tbody>
+            {% for account in accounts %}
+                <tr>
+                    <td><a href="{% url 'ledger:account_update' account.pk %}">{{ account.name }}</a></td>
+                    <td>{{ account.get_account_type_display }}</td>
+                    <td class="text-end">{{ account.current_balance }}</td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="3" class="text-muted">No accounts yet. <a href="{% url 'ledger:account_create' %}">Create one</a>.</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-6">
+        <h5>Overdue &amp; unexecuted</h5>
+        <table class="table table-sm">
+            <thead><tr><th>Due</th><th>Account</th><th>Description</th><th class="text-end">Amount</th></tr></thead>
+            <tbody>
+            {% for txn in overdue %}
+                <tr>
+                    <td>{{ txn.due_date }}</td>
+                    <td>{{ txn.account.name }}</td>
+                    <td>{{ txn.description }}</td>
+                    <td class="text-end {% if txn.direction == 'OUT' %}text-danger{% else %}text-success{% endif %}">
+                        {% if txn.direction == 'OUT' %}-{% else %}+{% endif %}{{ txn.amount }}
+                    </td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="4" class="text-muted">None.</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <div class="col-md-6">
+        <h5>Upcoming</h5>
+        <table class="table table-sm">
+            <thead><tr><th>Due</th><th>Account</th><th>Description</th><th class="text-end">Amount</th></tr></thead>
+            <tbody>
+            {% for txn in upcoming %}
+                <tr>
+                    <td>{{ txn.due_date }}</td>
+                    <td>{{ txn.account.name }}</td>
+                    <td>{{ txn.description }}</td>
+                    <td class="text-end {% if txn.direction == 'OUT' %}text-danger{% else %}text-success{% endif %}">
+                        {% if txn.direction == 'OUT' %}-{% else %}+{% endif %}{{ txn.amount }}
+                    </td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="4" class="text-muted">None.</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

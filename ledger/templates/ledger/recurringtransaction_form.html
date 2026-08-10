@@ -1,0 +1,15 @@
+{% extends "ledger/base.html" %}
+{% load django_bootstrap5 %}
+{% block title %}{% if recurring %}Edit recurring transaction{% else %}New recurring transaction{% endif %} — Cash{% endblock %}
+{% block content %}
+<h1 class="mb-4">{% if recurring %}Edit recurring transaction{% else %}New recurring transaction{% endif %}</h1>
+{% if recurring %}
+    <div class="alert alert-info">Saving will regenerate this template's future, not-yet-executed occurrences with the new details. Already-executed and overdue occurrences are left untouched.</div>
+{% endif %}
+<form method="post">
+    {% csrf_token %}
+    {% bootstrap_form form %}
+    {% bootstrap_button "Save" button_type="submit" button_class="btn-primary" %}
+    <a href="{% url 'ledger:recurring_list' %}" class="btn btn-outline-secondary">Cancel</a>
+</form>
+{% endblock %}

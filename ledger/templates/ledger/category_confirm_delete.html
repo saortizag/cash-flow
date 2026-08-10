@@ -1,0 +1,11 @@
+{% extends "ledger/base.html" %}
+{% block title %}Delete category — Cash{% endblock %}
+{% block content %}
+<h1 class="mb-4">Delete category</h1>
+<p>Are you sure you want to delete <strong>{{ object.name }}</strong>? Transactions using it will keep their history with no category.</p>
+<form method="post">
+    {% csrf_token %}
+    <button type="submit" class="btn btn-danger">Delete</button>
+    <a href="{% url 'ledger:category_list' %}" class="btn btn-outline-secondary">Cancel</a>
+</form>
+{% endblock %}

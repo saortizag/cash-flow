@@ -1,0 +1,65 @@
+{% extends "ledger/base.html" %}
+{% load django_bootstrap5 %}
+{% block title %}Cash flow projection — Cash{% endblock %}
+{% block content %}
+<h1 class="mb-4">Cash flow projection</h1>
+
+<form method="get" class="row row-cols-lg-auto g-2 align-items-center mb-4">
+    {% bootstrap_form form layout="inline" %}
+    <div class="col-12">
+        <button type="submit" class="btn btn-primary">Project</button>
+    </div>
+</form>
+
+{% if results %}
+<div class="row mb-4">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-body">
+                <h6 class="card-subtitle mb-1 text-muted">Current balance (combined)</h6>
+                <p class="fs-4 mb-0">{{ combined_current }}</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card text-bg-primary">
+            <div class="card-body">
+                <h6 class="card-subtitle mb-1">Projected balance on {{ target_date }}</h6>
+                <p class="fs-4 mb-0">{{ combined_projected }}</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% for result in results %}
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between">
+        <strong>{{ result.account.name }}</strong>
+        <span>{{ result.current_balance }} &rarr; <strong>{{ result.projected_balance }}</strong></span>
+    </div>
+    {% if result.rows %}
+    <table class="table table-sm mb-0">
+        <thead>
+        <tr><th>Due</th><th>Description</th><th>Category</th><th class="text-end">Amount</th><th class="text-end">Running balance</th></tr>
+        </thead>
+        <tbody>
+        {% for row in result.rows %}
+            <tr>
+                <td>{{ row.transaction.due_date }}</td>
+                <td>{{ row.transaction.description }}</td>
+                <td>{{ row.transaction.category.name|default:"—" }}</td>
+                <td class="text-end {% if row.transaction.direction == 'OUT' %}text-danger{% else %}text-success{% endif %}">
+                    {% if row.transaction.direction == 'OUT' %}-{% else %}+{% endif %}{{ row.transaction.amount }}
+                </td>
+                <td class="text-end">{{ row.running_balance }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="card-body text-muted">No pending transactions before {{ target_date }} — balance stays at {{ result.current_balance }}.</div>
+    {% endif %}
+</div>
+{% endfor %}
+{% endif %}
+{% endblock %}

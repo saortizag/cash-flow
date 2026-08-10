@@ -1,0 +1,5 @@
+Django==6.1
+django-bootstrap5==26.2
+python-dateutil==2.9.0.post0
+psycopg[binary]>=3.2
+python-dotenv>=1.0
