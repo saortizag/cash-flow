@@ -1,12 +1,12 @@
 {% extends "ledger/base.html" %}
-{% load django_bootstrap5 %}
+{% load django_bootstrap5 ledger_extras %}
 {% block title %}Execute transfer — Cash{% endblock %}
 {% block content %}
 <h1 class="mb-4">Execute transfer</h1>
 <p>
-    Executing will move {{ transfer.out_leg.amount }} from
-    <strong>{{ transfer.out_leg.account.name }}</strong> (currently {{ transfer.out_leg.account.current_balance }})
-    to <strong>{{ transfer.in_leg.account.name }}</strong> (currently {{ transfer.in_leg.account.current_balance }}).
+    Executing will move {{ transfer.out_leg.amount|money }} from
+    <strong>{{ transfer.out_leg.account.name }}</strong> (currently {{ transfer.out_leg.account.current_balance|money }})
+    to <strong>{{ transfer.in_leg.account.name }}</strong> (currently {{ transfer.in_leg.account.current_balance|money }}).
 </p>
 <form method="post">
     {% csrf_token %}

@@ -1,10 +1,10 @@
 {% extends "ledger/base.html" %}
-{% load django_bootstrap5 %}
+{% load django_bootstrap5 ledger_extras %}
 {% block title %}Assign account — Cash{% endblock %}
 {% block content %}
 <h1 class="mb-4">Assign account</h1>
 <p>
-    {{ transaction.due_date }} {{ transaction.get_direction_display }} of {{ transaction.amount }}
+    {{ transaction.due_date }} {{ transaction.get_direction_display }} of {{ transaction.amount|money }}
     {% if transaction.description %}— {{ transaction.description }}{% endif %}
 </p>
 <form method="post">

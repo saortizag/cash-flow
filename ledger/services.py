@@ -337,8 +337,27 @@ def _next_month_day(from_date, day):
     """The date with day-of-month `day` in the month immediately after
     from_date's month, clamped to that month's actual length (e.g. day=31
     applied to a 30-day month lands on its 30th) — the same relativedelta
-    clamping behavior _occurrence_date already relies on above."""
+    clamping behavior _occurrence_date already relies on above. Used for
+    computing a due_date from a real cut_date, and for advancing
+    next_statement_cut_date after a real close — both of those genuinely
+    always mean "one month later," never "later this month."""
     return from_date + relativedelta(months=1, day=day)
+
+
+def _next_occurrence_of_day(from_date, day):
+    """The NEAREST date with day-of-month `day` strictly after from_date —
+    later this month if that day hasn't happened yet, otherwise next month.
+    Distinct from _next_month_day (which always jumps a full month): this one
+    is specifically for SEEDING a card's first next_statement_cut_date (at
+    bootstrap or self-heal time), where "always next month" would wrongly
+    skip an upcoming same-month cut day that hasn't happened yet — e.g.
+    configuring a card on the 11th with cut_day=25 should seed to the 25th of
+    THIS month, not next month. "from_date == day" counts as already passed
+    (seeds to next month), same as any other date on/before from_date."""
+    candidate = from_date + relativedelta(day=day)
+    if candidate <= from_date:
+        candidate = from_date + relativedelta(months=1, day=day)
+    return candidate
 
 
 @db_transaction.atomic
@@ -363,7 +382,7 @@ def bootstrap_statement(card, amount_owed, due_date, today=None):
     Transaction.objects.filter(account=card, executed=True, statement__isnull=True).update(statement=statement)
     card.current_balance = -amount_owed
     if card.cut_day and card.payment_due_day:
-        card.next_statement_cut_date = _next_month_day(today, card.cut_day)
+        card.next_statement_cut_date = _next_occurrence_of_day(today, card.cut_day)
     card.save(update_fields=['current_balance', 'next_statement_cut_date', 'updated_at'])
     return statement
 
@@ -428,8 +447,17 @@ def close_statement_if_due(card, today=None):
 
 @db_transaction.atomic
 def _materialize_statement(card, cut_date):
-    claimable = Transaction.objects.filter(account=card, executed=True, statement__isnull=True,
-                                            due_date__lte=cut_date)
+    # Excludes transactions that are themselves the in_leg of a PAYMENT
+    # transfer (i.e. transfer_as_destination -> credit_card_statement is
+    # set) — a statement's payment obligation materializes as an ordinary IN
+    # transaction on the card, so without this exclusion, paying an old
+    # statement before the NEXT cut runs would let that payment get swept
+    # into (and corrupt) the following statement's own claiming/sum, as if
+    # it were a fresh credit reducing THAT cycle's debt instead of settling
+    # the previous one.
+    claimable = Transaction.objects.filter(
+        account=card, executed=True, statement__isnull=True, due_date__lte=cut_date,
+    ).exclude(transfer_as_destination__credit_card_statement__isnull=False)
     net_owed = -sum((signed_amount(t.direction, t.amount) for t in claimable), Decimal('0.00'))
     statement_balance = max(net_owed, Decimal('0.00'))
     due_date = _next_month_day(cut_date, card.payment_due_day)
@@ -457,7 +485,7 @@ def close_statements_if_due_for_all_cards(today=None):
     results = {}
     for card in cards:
         if not card.next_statement_cut_date and card.cut_day and card.payment_due_day:
-            card.next_statement_cut_date = _next_month_day(today, card.cut_day)
+            card.next_statement_cut_date = _next_occurrence_of_day(today, card.cut_day)
             card.save(update_fields=['next_statement_cut_date', 'updated_at'])
         results[card.pk] = close_statement_if_due(card, today=today)
     return results

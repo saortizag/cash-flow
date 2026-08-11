@@ -1,4 +1,5 @@
 {% extends "ledger/base.html" %}
+{% load ledger_extras %}
 {% block title %}Accounts — Cash{% endblock %}
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-4">
@@ -12,7 +13,7 @@
         <tr>
             <td>{{ account.name }}</td>
             <td>{{ account.get_account_type_display }}</td>
-            <td class="text-end">{{ account.current_balance }}</td>
+            <td class="text-end">{{ account.current_balance|money }}</td>
             <td>{% if account.is_active %}Yes{% else %}No{% endif %}</td>
             <td class="text-end">
                 <a href="{% url 'ledger:account_update' account.pk %}" class="btn btn-sm btn-outline-secondary">Edit</a>

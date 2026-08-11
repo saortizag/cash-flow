@@ -1,9 +1,10 @@
 {% extends "ledger/base.html" %}
+{% load ledger_extras %}
 {% block title %}Delete transfer — Cash{% endblock %}
 {% block content %}
 <h1 class="mb-4">Delete transfer</h1>
 <p>
-    Delete the {{ transfer.out_leg.due_date }} transfer of {{ transfer.out_leg.amount }} from
+    Delete the {{ transfer.out_leg.due_date }} transfer of {{ transfer.out_leg.amount|money }} from
     {{ transfer.out_leg.account.name|default:"Unassigned" }} to {{ transfer.in_leg.account.name }}?
 </p>
 <form method="post">

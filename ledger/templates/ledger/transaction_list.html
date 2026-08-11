@@ -1,4 +1,5 @@
 {% extends "ledger/base.html" %}
+{% load ledger_extras %}
 {% block title %}Transactions — Cash{% endblock %}
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-4">
@@ -68,7 +69,7 @@
             <td>{{ txn.category.name|default:"—" }}</td>
             <td>{{ txn.description }}</td>
             <td class="text-end {% if txn.direction == 'OUT' %}text-danger{% else %}text-success{% endif %}">
-                {% if txn.direction == 'OUT' %}-{% else %}+{% endif %}{{ txn.amount }}
+                {% if txn.direction == 'OUT' %}-{% else %}+{% endif %}{{ txn.amount|money }}
             </td>
             <td>
                 {% if txn.executed %}

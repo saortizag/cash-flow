@@ -1,4 +1,5 @@
 {% extends "ledger/base.html" %}
+{% load ledger_extras %}
 {% block title %}Transfers — Cash{% endblock %}
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-4">
@@ -15,7 +16,7 @@
             <td>{{ transfer.out_leg.due_date }}</td>
             <td>{{ transfer.out_leg.account.name|default:"Unassigned" }}</td>
             <td>{{ transfer.in_leg.account.name|default:"Unassigned" }}</td>
-            <td class="text-end">{{ transfer.out_leg.amount }}</td>
+            <td class="text-end">{{ transfer.out_leg.amount|money }}</td>
             <td>
                 {% if transfer.out_leg.executed %}
                     <span class="badge text-bg-success">Executed {{ transfer.out_leg.executed_date }}</span>

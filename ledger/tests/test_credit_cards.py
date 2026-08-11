@@ -19,6 +19,26 @@ class NextMonthDayTests(TestCase):
         self.assertEqual(services._next_month_day(date(2026, 12, 15), 31), date(2027, 1, 31))
 
 
+class NextOccurrenceOfDayTests(TestCase):
+    """_next_month_day always jumps a full month (right for advancing a REAL
+    cycle forward); _next_occurrence_of_day finds the NEAREST upcoming
+    occurrence (right for seeding a new card's first cut date) — these must
+    diverge exactly when from_date is still before this month's day."""
+
+    def test_day_not_yet_passed_this_month_stays_this_month(self):
+        self.assertEqual(services._next_occurrence_of_day(date(2026, 8, 11), 25), date(2026, 8, 25))
+
+    def test_day_already_passed_this_month_moves_to_next_month(self):
+        self.assertEqual(services._next_occurrence_of_day(date(2026, 8, 11), 10), date(2026, 9, 10))
+
+    def test_day_equal_to_from_date_moves_to_next_month(self):
+        self.assertEqual(services._next_occurrence_of_day(date(2026, 8, 11), 11), date(2026, 9, 11))
+
+    def test_clamps_to_shorter_month(self):
+        self.assertEqual(services._next_occurrence_of_day(date(2026, 1, 5), 31), date(2026, 1, 31))
+        self.assertEqual(services._next_occurrence_of_day(date(2026, 2, 5), 31), date(2026, 2, 28))
+
+
 class CreditCardPurchaseTests(TestCase):
     """Purchases are ordinary Transactions on a credit-card account; the
     negative-balance convention means signed_amount/execute_transaction need
@@ -53,21 +73,38 @@ class BootstrapStatementTests(TestCase):
             cut_day=15, payment_due_day=5,
         )
 
-    def test_sets_balance_and_seeds_next_cut_date(self):
+    def test_sets_balance_and_seeds_next_cut_date_this_month_if_not_yet_passed(self):
+        # today (Feb 1) is BEFORE this month's cut_day (15), so the nearest
+        # upcoming cut is THIS month, not next month.
         statement = services.bootstrap_statement(self.card, Decimal('300.00'), date(2026, 3, 5), today=date(2026, 2, 1))
         self.card.refresh_from_db()
         self.assertEqual(self.card.current_balance, Decimal('-300.00'))
-        self.assertEqual(self.card.next_statement_cut_date, date(2026, 3, 15))
+        self.assertEqual(self.card.next_statement_cut_date, date(2026, 2, 15))
         self.assertEqual(statement.statement_balance, Decimal('300.00'))
         self.assertIsNone(statement.cut_date)
         self.assertIsNone(statement.payment_obligation)
 
+    def test_seeds_next_cut_date_next_month_if_already_passed(self):
+        # today (Feb 20) is AFTER this month's cut_day (15), so the nearest
+        # upcoming cut is next month.
+        services.bootstrap_statement(self.card, Decimal('300.00'), date(2026, 3, 5), today=date(2026, 2, 20))
+        self.card.refresh_from_db()
+        self.assertEqual(self.card.next_statement_cut_date, date(2026, 3, 15))
+
     def test_does_not_cause_double_counting_on_next_real_close(self):
+        # today (Feb 1) is before cut_day (15), so bootstrap seeds the first
+        # real cut to THIS month (Feb 15) — an empty cycle, since the
+        # bootstrap figure already covers everything up to today. The
+        # purchase below (due Mar 1) belongs to the FOLLOWING cycle (Mar 15).
         services.bootstrap_statement(self.card, Decimal('300.00'), date(2026, 3, 5), today=date(2026, 2, 1))
-        # A purchase made AFTER the bootstrap point.
         txn = Transaction.objects.create(account=self.card, direction=Transaction.Direction.OUT,
                                           amount=Decimal('40.00'), due_date=date(2026, 3, 1))
         services.execute_transaction(txn, executed_date=date(2026, 3, 1))
+
+        empty_cycle = services.close_statement_if_due(self.card, today=date(2026, 3, 20))
+        self.assertEqual(empty_cycle.statement_balance, Decimal('0.00'))
+        self.assertIsNone(empty_cycle.payment_obligation)
+
         statement = services.close_statement_if_due(self.card, today=date(2026, 3, 20))
         self.assertIsNotNone(statement)
         # Only the new purchase is claimed — the bootstrap figure isn't re-counted.
@@ -111,6 +148,31 @@ class CloseStatementIfDueTests(TestCase):
         result = services.close_statement_if_due(self.card, today=date(2026, 2, 1))
         self.assertIsNone(result)
         self.assertEqual(CreditCardStatement.objects.count(), 0)
+
+    def test_paying_a_statement_before_the_next_cut_does_not_corrupt_the_next_statement(self):
+        # Regression: a statement's payment obligation materializes as an IN
+        # transaction on the card (the Transfer's in_leg). If that payment is
+        # executed before the NEXT cut runs, the next close's claimable query
+        # (executed=True, statement__isnull=True, due_date<=cut_date) has no
+        # reason to exclude it — it would get swept in as if it were a
+        # genuine credit reducing that cycle's debt, corrupting the total.
+        first = self.make_purchase('30.00', date(2026, 1, 20))
+        first_statement = services.close_statement_if_due(self.card, today=date(2026, 2, 15))
+        self.assertEqual(first_statement.statement_balance, Decimal('30.00'))
+
+        funding = Account.objects.create(name='Checking', current_balance=Decimal('1000.00'))
+        transfer = first_statement.payment_obligation
+        services.assign_account(transfer.out_leg, funding)
+        services.execute_transfer(transfer, executed_date=date(2026, 3, 1))  # paid well before the next cut
+
+        # A genuine new purchase for the NEXT cycle.
+        self.make_purchase('12.00', date(2026, 3, 10))
+
+        second_statement = services.close_statement_if_due(self.card, today=date(2026, 3, 15))
+        self.assertIsNotNone(second_statement)
+        self.assertEqual(second_statement.statement_balance, Decimal('12.00'))
+        transfer.in_leg.refresh_from_db()
+        self.assertIsNone(transfer.in_leg.statement_id)  # the payment leg is never claimed by any statement
 
     def test_payment_due_day_cleared_after_cycling_started_pauses_rather_than_using_wrong_date(self):
         # Regression: next_statement_cut_date is already set (from setUp), so
@@ -220,7 +282,9 @@ class CardConfiguredDirectlyRegressionTests(TestCase):
         services.close_statements_if_due_for_all_cards(today=date(2026, 2, 1))
 
         card.refresh_from_db()
-        self.assertEqual(card.next_statement_cut_date, date(2026, 3, 15))
+        # today (Feb 1) is before this month's cut_day (15) — nearest upcoming
+        # cut is THIS month, not next.
+        self.assertEqual(card.next_statement_cut_date, date(2026, 2, 15))
 
     def test_card_missing_payment_due_day_is_not_seeded(self):
         # Without payment_due_day, close_statement_if_due would have no valid

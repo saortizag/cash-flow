@@ -1,8 +1,9 @@
 {% extends "ledger/base.html" %}
+{% load ledger_extras %}
 {% block title %}Delete transaction — Cash{% endblock %}
 {% block content %}
 <h1 class="mb-4">Delete transaction</h1>
-<p>Delete the {{ transaction.due_date }} {{ transaction.get_direction_display }} of {{ transaction.amount }} on {{ transaction.account.name }}?</p>
+<p>Delete the {{ transaction.due_date }} {{ transaction.get_direction_display }} of {{ transaction.amount|money }} on {{ transaction.account.name }}?</p>
 <form method="post">
     {% csrf_token %}
     <button type="submit" class="btn btn-danger">Delete</button>

@@ -1,5 +1,5 @@
 {% extends "ledger/base.html" %}
-{% load django_bootstrap5 %}
+{% load django_bootstrap5 ledger_extras %}
 {% block title %}Cash flow projection — Cash{% endblock %}
 {% block content %}
 <h1 class="mb-4">Cash flow projection</h1>
@@ -17,7 +17,7 @@
         <div class="card">
             <div class="card-body">
                 <h6 class="card-subtitle mb-1 text-muted">Current balance (combined)</h6>
-                <p class="fs-4 mb-0">{{ combined_current }}</p>
+                <p class="fs-4 mb-0">{{ combined_current|money }}</p>
             </div>
         </div>
     </div>
@@ -25,7 +25,7 @@
         <div class="card text-bg-primary">
             <div class="card-body">
                 <h6 class="card-subtitle mb-1">Projected balance on {{ target_date }}</h6>
-                <p class="fs-4 mb-0">{{ combined_projected }}</p>
+                <p class="fs-4 mb-0">{{ combined_projected|money }}</p>
             </div>
         </div>
     </div>
@@ -35,7 +35,7 @@
 <div class="card mb-3 border-warning">
     <div class="card-header d-flex justify-content-between">
         <strong>Unassigned upcoming obligations</strong>
-        <span>Not yet tied to an account: <strong>{{ unassigned_total }}</strong> (included in the combined total above)</span>
+        <span>Not yet tied to an account: <strong>{{ unassigned_total|money }}</strong> (included in the combined total above)</span>
     </div>
     <table class="table table-sm mb-0">
         <thead>
@@ -48,9 +48,9 @@
                 <td>{{ row.transaction.description }}</td>
                 <td>{{ row.transaction.category.name|default:"—" }}</td>
                 <td class="text-end {% if row.transaction.direction == 'OUT' %}text-danger{% else %}text-success{% endif %}">
-                    {% if row.transaction.direction == 'OUT' %}-{% else %}+{% endif %}{{ row.transaction.amount }}
+                    {% if row.transaction.direction == 'OUT' %}-{% else %}+{% endif %}{{ row.transaction.amount|money }}
                 </td>
-                <td class="text-end">{{ row.running_total }}</td>
+                <td class="text-end">{{ row.running_total|money }}</td>
             </tr>
         {% endfor %}
         </tbody>
@@ -62,7 +62,7 @@
 <div class="card mb-3">
     <div class="card-header d-flex justify-content-between">
         <strong>{{ result.account.name }}</strong>
-        <span>{{ result.current_balance }} &rarr; <strong>{{ result.projected_balance }}</strong></span>
+        <span>{{ result.current_balance|money }} &rarr; <strong>{{ result.projected_balance|money }}</strong></span>
     </div>
     {% if result.rows %}
     <table class="table table-sm mb-0">
@@ -76,15 +76,15 @@
                 <td>{{ row.transaction.description }}</td>
                 <td>{{ row.transaction.category.name|default:"—" }}</td>
                 <td class="text-end {% if row.transaction.direction == 'OUT' %}text-danger{% else %}text-success{% endif %}">
-                    {% if row.transaction.direction == 'OUT' %}-{% else %}+{% endif %}{{ row.transaction.amount }}
+                    {% if row.transaction.direction == 'OUT' %}-{% else %}+{% endif %}{{ row.transaction.amount|money }}
                 </td>
-                <td class="text-end">{{ row.running_balance }}</td>
+                <td class="text-end">{{ row.running_balance|money }}</td>
             </tr>
         {% endfor %}
         </tbody>
     </table>
     {% else %}
-    <div class="card-body text-muted">No pending transactions before {{ target_date }} — balance stays at {{ result.current_balance }}.</div>
+    <div class="card-body text-muted">No pending transactions before {{ target_date }} — balance stays at {{ result.current_balance|money }}.</div>
     {% endif %}
 </div>
 {% endfor %}

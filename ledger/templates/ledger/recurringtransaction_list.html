@@ -1,4 +1,5 @@
 {% extends "ledger/base.html" %}
+{% load ledger_extras %}
 {% block title %}Recurring transactions — Cash{% endblock %}
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-4">
@@ -18,7 +19,7 @@
             <td>{{ recurring.description|default:"—" }}</td>
             <td>{{ recurring.account.name }}</td>
             <td class="text-end {% if recurring.direction == 'OUT' %}text-danger{% else %}text-success{% endif %}">
-                {% if recurring.direction == 'OUT' %}-{% else %}+{% endif %}{{ recurring.amount }}
+                {% if recurring.direction == 'OUT' %}-{% else %}+{% endif %}{{ recurring.amount|money }}
             </td>
             <td>every {{ recurring.interval }} {{ recurring.get_frequency_display|lower }}</td>
             <td>{{ recurring.start_date }}</td>
