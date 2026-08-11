@@ -10,6 +10,7 @@
     <div class="col-12">
         <select name="account" class="form-select form-select-sm">
             <option value="">All accounts</option>
+            <option value="unassigned" {% if request.GET.account == "unassigned" %}selected{% endif %}>Unassigned</option>
             {% for account in accounts %}
                 <option value="{{ account.pk }}" {% if request.GET.account == account.pk|stringformat:"s" %}selected{% endif %}>{{ account.name }}</option>
             {% endfor %}
@@ -54,7 +55,16 @@
     {% for txn in transactions %}
         <tr>
             <td>{{ txn.due_date }}</td>
-            <td>{{ txn.account.name }}</td>
+            <td>
+                {% if txn.account %}
+                    {{ txn.account.name }}
+                {% else %}
+                    <span class="badge text-bg-warning">Unassigned</span>
+                {% endif %}
+                {% if txn.transfer_as_source or txn.transfer_as_destination %}
+                    <span class="badge text-bg-info">Transfer</span>
+                {% endif %}
+            </td>
             <td>{{ txn.category.name|default:"—" }}</td>
             <td>{{ txn.description }}</td>
             <td class="text-end {% if txn.direction == 'OUT' %}text-danger{% else %}text-success{% endif %}">
@@ -68,15 +78,26 @@
                 {% endif %}
             </td>
             <td class="text-end text-nowrap">
-                <a href="{% url 'ledger:transaction_update' txn.pk %}" class="btn btn-sm btn-outline-secondary">Edit</a>
-                {% if txn.executed %}
-                    <form method="post" action="{% url 'ledger:transaction_unexecute' txn.pk %}" class="d-inline">
-                        {% csrf_token %}
-                        <button type="submit" class="btn btn-sm btn-outline-warning">Un-execute</button>
-                    </form>
+                {% if txn.transfer_as_source %}
+                    <a href="{% url 'ledger:transfer_detail' txn.transfer_as_source.pk %}" class="btn btn-sm btn-outline-secondary">View transfer</a>
+                {% elif txn.transfer_as_destination %}
+                    <a href="{% url 'ledger:transfer_detail' txn.transfer_as_destination.pk %}" class="btn btn-sm btn-outline-secondary">View transfer</a>
                 {% else %}
-                    <a href="{% url 'ledger:transaction_execute' txn.pk %}" class="btn btn-sm btn-outline-success">Execute</a>
-                    <a href="{% url 'ledger:transaction_delete' txn.pk %}" class="btn btn-sm btn-outline-danger">Delete</a>
+                    {% if not txn.account %}
+                        <a href="{% url 'ledger:transaction_assign_account' txn.pk %}" class="btn btn-sm btn-outline-primary">Assign account</a>
+                    {% endif %}
+                    <a href="{% url 'ledger:transaction_update' txn.pk %}" class="btn btn-sm btn-outline-secondary">Edit</a>
+                    {% if txn.executed %}
+                        <form method="post" action="{% url 'ledger:transaction_unexecute' txn.pk %}" class="d-inline">
+                            {% csrf_token %}
+                            <button type="submit" class="btn btn-sm btn-outline-warning">Un-execute</button>
+                        </form>
+                    {% else %}
+                        {% if txn.account %}
+                            <a href="{% url 'ledger:transaction_execute' txn.pk %}" class="btn btn-sm btn-outline-success">Execute</a>
+                        {% endif %}
+                        <a href="{% url 'ledger:transaction_delete' txn.pk %}" class="btn btn-sm btn-outline-danger">Delete</a>
+                    {% endif %}
                 {% endif %}
             </td>
         </tr>

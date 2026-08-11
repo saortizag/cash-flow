@@ -11,6 +11,7 @@ urlpatterns = [
     path('accounts/new/', views.AccountCreateView.as_view(), name='account_create'),
     path('accounts/<int:pk>/edit/', views.AccountUpdateView.as_view(), name='account_update'),
     path('accounts/<int:pk>/delete/', views.AccountDeleteView.as_view(), name='account_delete'),
+    path('accounts/credit-card-bootstrap/', views.credit_card_bootstrap, name='credit_card_bootstrap'),
 
     path('categories/', views.CategoryListView.as_view(), name='category_list'),
     path('categories/new/', views.CategoryCreateView.as_view(), name='category_create'),
@@ -23,6 +24,15 @@ urlpatterns = [
     path('transactions/<int:pk>/delete/', views.transaction_delete, name='transaction_delete'),
     path('transactions/<int:pk>/execute/', views.transaction_execute, name='transaction_execute'),
     path('transactions/<int:pk>/unexecute/', views.transaction_unexecute, name='transaction_unexecute'),
+    path('transactions/<int:pk>/assign-account/', views.transaction_assign_account, name='transaction_assign_account'),
+
+    path('transfers/', views.transfer_list, name='transfer_list'),
+    path('transfers/new/', views.transfer_create, name='transfer_create'),
+    path('transfers/<int:pk>/', views.transfer_detail, name='transfer_detail'),
+    path('transfers/<int:pk>/edit/', views.transfer_update, name='transfer_update'),
+    path('transfers/<int:pk>/delete/', views.transfer_delete, name='transfer_delete'),
+    path('transfers/<int:pk>/execute/', views.transfer_execute, name='transfer_execute'),
+    path('transfers/<int:pk>/unexecute/', views.transfer_unexecute, name='transfer_unexecute'),
 
     path('recurring/', views.RecurringListView.as_view(), name='recurring_list'),
     path('recurring/new/', views.RecurringCreateView.as_view(), name='recurring_create'),

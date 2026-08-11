@@ -7,13 +7,27 @@ from .models import Account, Category, RecurringTransaction, Transaction
 class AccountForm(forms.ModelForm):
     class Meta:
         model = Account
-        fields = ['name', 'account_type', 'current_balance', 'is_active']
+        fields = ['name', 'account_type', 'current_balance', 'is_active', 'cut_day', 'payment_due_day']
+        help_texts = {
+            'current_balance': 'For a credit card, enter this as a NEGATIVE number (e.g. -450.00 means you owe 450).',
+        }
 
 
 class CategoryForm(forms.ModelForm):
     class Meta:
         model = Category
         fields = ['name', 'description', 'typical_direction']
+
+
+class CreditCardBootstrapForm(forms.Form):
+    """'I owe X, due on D' — onboarding a card that already has a balance,
+    with no itemized purchase history to back it. See services.bootstrap_statement."""
+    account = forms.ModelChoiceField(
+        queryset=Account.objects.filter(is_active=True, account_type=Account.AccountType.CREDIT_CARD),
+        label='Credit card',
+    )
+    amount_owed = forms.DecimalField(max_digits=10, decimal_places=2, min_value=0)
+    due_date = forms.DateField(widget=forms.DateInput(attrs={'type': 'date'}))
 
 
 class ActiveAccountFieldMixin:
@@ -32,6 +46,11 @@ class ActiveAccountFieldMixin:
         if instance and instance.pk and instance.account_id:
             queryset = queryset | Account.objects.filter(pk=instance.account_id)
         self.fields['account'].queryset = queryset
+        # Transaction.account is nullable (a not-yet-assigned planned payment);
+        # RecurringTransaction.account is not, so this only changes anything
+        # for the forms where the underlying model field is actually optional.
+        if not self.fields['account'].required:
+            self.fields['account'].empty_label = 'Not yet assigned'
 
 
 class TransactionCreateForm(ActiveAccountFieldMixin, forms.ModelForm):
@@ -52,6 +71,8 @@ class TransactionCreateForm(ActiveAccountFieldMixin, forms.ModelForm):
             cleaned['executed_date'] = timezone.localdate()
         if not cleaned.get('executed'):
             cleaned['executed_date'] = None
+        if cleaned.get('executed') and not cleaned.get('account'):
+            self.add_error('account', 'Assign an account before marking this as already executed.')
         return cleaned
 
 
@@ -75,6 +96,11 @@ class TransactionOpenFieldsForm(forms.ModelForm):
         widgets = {'due_date': forms.DateInput(attrs={'type': 'date'})}
 
 
+class AssignAccountForm(forms.Form):
+    """Only ever shown when the target Transaction's account is currently None."""
+    account = forms.ModelChoiceField(queryset=Account.objects.filter(is_active=True))
+
+
 class ExecuteTransactionForm(forms.Form):
     executed_date = forms.DateField(widget=forms.DateInput(attrs={'type': 'date'}), initial=timezone.localdate)
 
@@ -88,6 +114,47 @@ class RecurringTransactionForm(ActiveAccountFieldMixin, forms.ModelForm):
             'start_date': forms.DateInput(attrs={'type': 'date'}),
             'end_date': forms.DateInput(attrs={'type': 'date'}),
         }
+
+
+class TransferCreateForm(forms.Form):
+    from_account = forms.ModelChoiceField(
+        queryset=Account.objects.filter(is_active=True), required=False, empty_label='Not yet assigned',
+        label='From',
+    )
+    to_account = forms.ModelChoiceField(queryset=Account.objects.filter(is_active=True), label='To')
+    amount = forms.DecimalField(max_digits=10, decimal_places=2, min_value=0.01)
+    description = forms.CharField(max_length=255, required=False)
+    due_date = forms.DateField(widget=forms.DateInput(attrs={'type': 'date'}))
+    executed = forms.BooleanField(
+        required=False, label='Already executed?',
+        help_text='Check this if logging a transfer that already happened.',
+    )
+    executed_date = forms.DateField(required=False, widget=forms.DateInput(attrs={'type': 'date'}))
+
+    def clean(self):
+        cleaned = super().clean()
+        if cleaned.get('executed') and not cleaned.get('executed_date'):
+            cleaned['executed_date'] = timezone.localdate()
+        if not cleaned.get('executed'):
+            cleaned['executed_date'] = None
+        if cleaned.get('executed') and not cleaned.get('from_account'):
+            self.add_error('from_account', 'Assign a source account before marking this as already executed.')
+        from_account, to_account = cleaned.get('from_account'), cleaned.get('to_account')
+        if from_account and to_account and from_account.pk == to_account.pk:
+            self.add_error('to_account', 'Source and destination must be different accounts.')
+        return cleaned
+
+
+class TransferEditForm(forms.Form):
+    """Amount/description/due_date only — mirrors services.update_transfer.
+    Only ever shown when the transfer is unexecuted."""
+    amount = forms.DecimalField(max_digits=10, decimal_places=2, min_value=0.01)
+    description = forms.CharField(max_length=255, required=False)
+    due_date = forms.DateField(widget=forms.DateInput(attrs={'type': 'date'}))
+
+
+class TransferExecuteForm(forms.Form):
+    executed_date = forms.DateField(widget=forms.DateInput(attrs={'type': 'date'}), initial=timezone.localdate)
 
 
 class ProjectionForm(forms.Form):

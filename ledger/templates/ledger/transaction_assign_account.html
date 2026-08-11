@@ -1,0 +1,20 @@
+{% extends "ledger/base.html" %}
+{% load django_bootstrap5 %}
+{% block title %}Assign account — Cash{% endblock %}
+{% block content %}
+<h1 class="mb-4">Assign account</h1>
+<p>
+    {{ transaction.due_date }} {{ transaction.get_direction_display }} of {{ transaction.amount }}
+    {% if transaction.description %}— {{ transaction.description }}{% endif %}
+</p>
+<form method="post">
+    {% csrf_token %}
+    {% bootstrap_form form %}
+    {% bootstrap_button "Assign" button_type="submit" button_class="btn-primary" %}
+    {% if transfer %}
+        <a href="{% url 'ledger:transfer_detail' transfer.pk %}" class="btn btn-outline-secondary">Cancel</a>
+    {% else %}
+        <a href="{% url 'ledger:transaction_list' %}" class="btn btn-outline-secondary">Cancel</a>
+    {% endif %}
+</form>
+{% endblock %}

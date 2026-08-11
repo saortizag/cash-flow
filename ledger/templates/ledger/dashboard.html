@@ -5,10 +5,26 @@
 
 <div class="row mb-4">
     <div class="col-md-4">
+        <div class="card">
+            <div class="card-body">
+                <h6 class="card-subtitle mb-1 text-muted">Assets</h6>
+                <p class="card-text fs-3 mb-0">{{ total_assets }}</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-body">
+                <h6 class="card-subtitle mb-1 text-muted">Card debt</h6>
+                <p class="card-text fs-3 mb-0">{{ total_card_debt }}</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
         <div class="card text-bg-primary">
             <div class="card-body">
-                <h6 class="card-subtitle mb-1">Total balance</h6>
-                <p class="card-text fs-3 mb-0">{{ total_balance }}</p>
+                <h6 class="card-subtitle mb-1">Net worth</h6>
+                <p class="card-text fs-3 mb-0">{{ net_worth }}</p>
             </div>
         </div>
     </div>
@@ -16,7 +32,10 @@
 
 <div class="row mb-4">
     <div class="col-md-6">
-        <h5>Accounts</h5>
+        <div class="d-flex justify-content-between align-items-center">
+            <h5>Accounts</h5>
+            <a href="{% url 'ledger:credit_card_bootstrap' %}" class="btn btn-sm btn-outline-secondary">I owe a credit card...</a>
+        </div>
         <table class="table table-sm">
             <thead><tr><th>Name</th><th>Type</th><th class="text-end">Balance</th></tr></thead>
             <tbody>
@@ -24,10 +43,30 @@
                 <tr>
                     <td><a href="{% url 'ledger:account_update' account.pk %}">{{ account.name }}</a></td>
                     <td>{{ account.get_account_type_display }}</td>
-                    <td class="text-end">{{ account.current_balance }}</td>
+                    <td class="text-end {% if account.account_type == 'credit_card' %}text-danger{% endif %}">{{ account.current_balance }}</td>
                 </tr>
             {% empty %}
                 <tr><td colspan="3" class="text-muted">No accounts yet. <a href="{% url 'ledger:account_create' %}">Create one</a>.</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <div class="col-md-6">
+        <h5>Needs an account assigned</h5>
+        <table class="table table-sm">
+            <thead><tr><th>Due</th><th>Description</th><th class="text-end">Amount</th><th></th></tr></thead>
+            <tbody>
+            {% for txn in unassigned %}
+                <tr>
+                    <td>{{ txn.due_date }}</td>
+                    <td>{{ txn.description }}</td>
+                    <td class="text-end {% if txn.direction == 'OUT' %}text-danger{% else %}text-success{% endif %}">
+                        {% if txn.direction == 'OUT' %}-{% else %}+{% endif %}{{ txn.amount }}
+                    </td>
+                    <td class="text-end"><a href="{% url 'ledger:transaction_assign_account' txn.pk %}" class="btn btn-sm btn-outline-primary">Assign</a></td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="4" class="text-muted">None.</td></tr>
             {% endfor %}
             </tbody>
         </table>

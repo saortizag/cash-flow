@@ -1,0 +1,17 @@
+{% extends "ledger/base.html" %}
+{% load django_bootstrap5 %}
+{% block title %}Record credit card debt — Cash{% endblock %}
+{% block content %}
+<h1 class="mb-4">I owe a credit card...</h1>
+<p class="text-muted">
+    For a card where you don't have itemized purchase history yet — just record what you currently
+    owe and when it's due. Going forward, add individual expenses to the card and they'll roll into
+    future statements automatically based on its cut-off day.
+</p>
+<form method="post">
+    {% csrf_token %}
+    {% bootstrap_form form %}
+    {% bootstrap_button "Record" button_type="submit" button_class="btn-primary" %}
+    <a href="{% url 'ledger:account_list' %}" class="btn btn-outline-secondary">Cancel</a>
+</form>
+{% endblock %}

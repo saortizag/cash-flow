@@ -25,7 +25,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction as db_transaction
 from django.utils import timezone
 
-from .models import Account, RecurringTransaction, Transaction
+from .models import Account, CreditCardStatement, RecurringTransaction, Transaction, Transfer
 
 DEFAULT_HORIZON_MONTHS = 12
 
@@ -46,6 +46,8 @@ def execute_transaction(txn, executed_date=None):
     locked_txn = Transaction.objects.select_for_update().get(pk=txn.pk)
     if locked_txn.executed:
         raise ValidationError('Transaction is already executed.')
+    if locked_txn.account_id is None:
+        raise ValidationError('Assign an account before executing this transaction.')
     account = Account.objects.select_for_update().get(pk=locked_txn.account_id)
     account.current_balance += signed_amount(locked_txn.direction, locked_txn.amount)
     account.save(update_fields=['current_balance', 'updated_at'])
@@ -239,3 +241,223 @@ def delete_recurring(recurring, today=None):
     today = today or timezone.localdate()
     recurring.occurrences.filter(executed=False, due_date__gte=today).delete()
     recurring.delete()
+
+
+# ---------- Unassigned-account transactions ----------
+
+@db_transaction.atomic
+def assign_account(txn, account):
+    """The only sanctioned way to attach an account to a previously-unassigned
+    pending Transaction (a plain planned payment, or a transfer's out_leg).
+    Locks+rechecks fresh state before checking executed/account_id, matching
+    every other check-then-act function in this file — two concurrent
+    assign-account submissions for the same row must not let the second
+    silently overwrite the first with no error."""
+    locked_txn = Transaction.objects.select_for_update().get(pk=txn.pk)
+    if locked_txn.executed:
+        raise ValidationError('Cannot assign an account to an already-executed transaction.')
+    if locked_txn.account_id is not None:
+        raise ValidationError('This transaction already has an account assigned.')
+    locked_txn.account = account
+    locked_txn.save(update_fields=['account', 'updated_at'])
+    txn.account = locked_txn.account
+    return txn
+
+
+# ---------- Transfers ----------
+# A Transfer is two linked Transaction rows (an OUT leg on the source, an IN
+# leg on the destination) rather than a standalone balance-affecting model —
+# see Transfer's docstring in models.py for why. Both legs always move
+# together: create/execute/unexecute/update/delete all wrap both legs in one
+# outer atomic block so it's never possible to end up with only one side done.
+
+@db_transaction.atomic
+def create_transfer(*, from_account, to_account, amount, description, due_date,
+                     executed=False, executed_date=None):
+    out_leg = Transaction.objects.create(account=from_account, direction=Transaction.Direction.OUT,
+                                          amount=amount, description=description, due_date=due_date)
+    in_leg = Transaction.objects.create(account=to_account, direction=Transaction.Direction.IN,
+                                         amount=amount, description=description, due_date=due_date)
+    transfer = Transfer.objects.create(out_leg=out_leg, in_leg=in_leg)
+    if executed:
+        execute_transfer(transfer, executed_date=executed_date)
+    return transfer
+
+
+@db_transaction.atomic
+def execute_transfer(transfer, executed_date=None):
+    if transfer.out_leg.account_id is None:
+        raise ValidationError('Assign a source account before executing this transfer.')
+    execute_transaction(transfer.out_leg, executed_date=executed_date)
+    execute_transaction(transfer.in_leg, executed_date=executed_date)
+    return transfer
+
+
+@db_transaction.atomic
+def unexecute_transfer(transfer):
+    # Same out_leg-then-in_leg order as execute_transfer/update_transfer/
+    # delete_transfer — every function touching a transfer's two legs must
+    # lock them in the SAME order, or two of these running concurrently on
+    # the same transfer (e.g. a double form submit) could deadlock.
+    unexecute_transaction(transfer.out_leg)
+    unexecute_transaction(transfer.in_leg)
+    return transfer
+
+
+@db_transaction.atomic
+def update_transfer(transfer, *, amount, description, due_date):
+    """Amount/description/due_date only, updated on both legs in lockstep.
+    Only valid while unexecuted. Reassigning accounts on an already-linked
+    transfer isn't supported — delete and recreate covers that rare case."""
+    for leg_id in (transfer.out_leg_id, transfer.in_leg_id):
+        locked = Transaction.objects.select_for_update().get(pk=leg_id)
+        if locked.executed:
+            raise ValidationError('Cannot edit an executed transfer. Un-execute it first.')
+        locked.amount = amount
+        locked.description = description
+        locked.due_date = due_date
+        locked.save(update_fields=['amount', 'description', 'due_date', 'updated_at'])
+    return transfer
+
+
+@db_transaction.atomic
+def delete_transfer(transfer):
+    out_leg = Transaction.objects.select_for_update().get(pk=transfer.out_leg_id)
+    in_leg = Transaction.objects.select_for_update().get(pk=transfer.in_leg_id)
+    if out_leg.executed or in_leg.executed:
+        raise ValidationError('Cannot delete an executed transfer. Un-execute it first.')
+    transfer.delete()   # delete the Transfer row first — its PROTECT references are what
+    out_leg.delete()    # stop the legs from being deleted directly (by design, to block
+    in_leg.delete()     # accidentally orphaning one side); once it's gone, legs delete freely.
+
+
+# ---------- Credit card statement cycling ----------
+
+def _next_month_day(from_date, day):
+    """The date with day-of-month `day` in the month immediately after
+    from_date's month, clamped to that month's actual length (e.g. day=31
+    applied to a 30-day month lands on its 30th) — the same relativedelta
+    clamping behavior _occurrence_date already relies on above."""
+    return from_date + relativedelta(months=1, day=day)
+
+
+@db_transaction.atomic
+def bootstrap_statement(card, amount_owed, due_date, today=None):
+    """'I owe X, due on D' — a manually-entered statement with no itemized
+    history behind it, for onboarding a card that already has a balance. Sets
+    the card's live balance to match and seeds next_statement_cut_date so
+    future cycling starts cleanly from here without re-claiming anything this
+    figure already covers.
+
+    Also claims any already-executed, not-yet-claimed Transaction rows on the
+    card into this statement (without adding their amounts to
+    statement_balance, which is the user's own figure). Without this, a
+    purchase logged BEFORE bootstrapping — presumably already reflected in
+    the real-world amount_owed the user just typed in — would still have
+    statement=NULL and get folded into (and double-counted by) the next real
+    close_statement_if_due."""
+    today = today or timezone.localdate()
+    statement = CreditCardStatement.objects.create(
+        account=card, cut_date=None, due_date=due_date, statement_balance=amount_owed,
+    )
+    Transaction.objects.filter(account=card, executed=True, statement__isnull=True).update(statement=statement)
+    card.current_balance = -amount_owed
+    if card.cut_day and card.payment_due_day:
+        card.next_statement_cut_date = _next_month_day(today, card.cut_day)
+    card.save(update_fields=['current_balance', 'next_statement_cut_date', 'updated_at'])
+    return statement
+
+
+@db_transaction.atomic
+def _claim_due_cut_date(card, today):
+    """Locks the Account row, checks whether a cycle is due, and — if so —
+    immediately advances next_statement_cut_date and commits before doing any
+    Transaction-touching work. This is its own short, self-contained
+    transaction (not folded into close_statement_if_due's larger one) so the
+    Account lock is never held while claimant Transaction rows are locked —
+    execute_transaction/unexecute_transaction lock Transaction-then-Account,
+    so holding Account-then-Transaction here for the whole close would risk a
+    lock-order deadlock against a concurrent purchase execution on the same
+    card. Returns the cut_date that was claimed, or None if nothing was due.
+
+    Trade-off: if the process crashes between this committing and
+    close_statement_if_due finishing the materialization below, the claimed
+    cycle is lost (no statement gets created for it, and it won't be retried
+    since next_statement_cut_date has already moved on). Accepted as an
+    unlikely failure mode for a personal app — the alternative (one long lock
+    spanning both phases) reintroduces the deadlock risk this split exists to
+    avoid."""
+    card = Account.objects.select_for_update().get(pk=card.pk)
+    if not card.next_statement_cut_date or today < card.next_statement_cut_date:
+        return None
+    if not card.payment_due_day:
+        # Cycling is paused until payment_due_day is (re)configured — without
+        # it there's no valid day to compute a due_date from. Deliberately
+        # does NOT advance next_statement_cut_date, so this is retried on
+        # every future check rather than silently skipping a cycle forever.
+        return None
+    cut_date = card.next_statement_cut_date
+    card.next_statement_cut_date = _next_month_day(cut_date, card.cut_day)
+    card.save(update_fields=['next_statement_cut_date', 'updated_at'])
+    return cut_date
+
+
+def close_statement_if_due(card, today=None):
+    """Idempotent, self-healing statement close — called opportunistically
+    (dashboard/projection views), same pattern as
+    ensure_recurring_horizon_for_all_active. May run well after the real
+    cut_date has passed, by which point new post-cut purchases may already
+    exist — so membership is explicit (Transaction.statement, claimed here)
+    rather than a live current_balance snapshot, which would wrongly absorb
+    those newer purchases into the closing cycle regardless of when this
+    happens to run. Returns the new statement, or None if nothing was due.
+
+    Deliberately NOT wrapped in one @db_transaction.atomic: it calls
+    _claim_due_cut_date and _materialize_statement, each independently
+    atomic, as two SEPARATE top-level transactions. If this function itself
+    were atomic, calling _claim_due_cut_date from inside it would turn that
+    inner atomic into a mere savepoint rather than a transaction that
+    actually commits (and releases its Account lock) before the second phase
+    starts — silently defeating the whole point of the split."""
+    today = today or timezone.localdate()
+    cut_date = _claim_due_cut_date(card, today)
+    if cut_date is None:
+        return None
+    return _materialize_statement(card, cut_date)
+
+
+@db_transaction.atomic
+def _materialize_statement(card, cut_date):
+    claimable = Transaction.objects.filter(account=card, executed=True, statement__isnull=True,
+                                            due_date__lte=cut_date)
+    net_owed = -sum((signed_amount(t.direction, t.amount) for t in claimable), Decimal('0.00'))
+    statement_balance = max(net_owed, Decimal('0.00'))
+    due_date = _next_month_day(cut_date, card.payment_due_day)
+    statement = CreditCardStatement.objects.create(
+        account=card, cut_date=cut_date, due_date=due_date, statement_balance=statement_balance,
+    )
+    claimable.update(statement=statement)
+    if statement_balance > 0:
+        transfer = create_transfer(from_account=None, to_account=card, amount=statement_balance,
+                                    description=f'{card.name} statement due {due_date}', due_date=due_date)
+        statement.payment_obligation = transfer
+        statement.save(update_fields=['payment_obligation'])
+    return statement
+
+
+def close_statements_if_due_for_all_cards(today=None):
+    """Also self-heals next_statement_cut_date for a card whose cut_day/
+    payment_due_day were set directly (e.g. via the plain Account form on a
+    fresh $0 card) rather than through bootstrap_statement — the only other
+    place that field gets seeded. Without this, such a card would look fully
+    configured but silently never cycle, since close_statement_if_due only
+    ever acts once next_statement_cut_date is non-null."""
+    today = today or timezone.localdate()
+    cards = Account.objects.filter(is_active=True, account_type=Account.AccountType.CREDIT_CARD)
+    results = {}
+    for card in cards:
+        if not card.next_statement_cut_date and card.cut_day and card.payment_due_day:
+            card.next_statement_cut_date = _next_month_day(today, card.cut_day)
+            card.save(update_fields=['next_statement_cut_date', 'updated_at'])
+        results[card.pk] = close_statement_if_due(card, today=today)
+    return results

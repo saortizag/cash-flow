@@ -1,0 +1,19 @@
+{% extends "ledger/base.html" %}
+{% load django_bootstrap5 %}
+{% block title %}{% if transfer %}Edit transfer{% else %}New transfer{% endif %} — Cash{% endblock %}
+{% block content %}
+<h1 class="mb-4">{% if transfer %}Edit transfer{% else %}New transfer{% endif %}</h1>
+{% if transfer %}
+    <p class="text-muted">{{ transfer.out_leg.account.name|default:"Unassigned" }} → {{ transfer.in_leg.account.name }} — only amount, description, and due date can be changed here; both legs update together.</p>
+{% endif %}
+<form method="post">
+    {% csrf_token %}
+    {% bootstrap_form form %}
+    {% bootstrap_button "Save" button_type="submit" button_class="btn-primary" %}
+    {% if transfer %}
+        <a href="{% url 'ledger:transfer_detail' transfer.pk %}" class="btn btn-outline-secondary">Cancel</a>
+    {% else %}
+        <a href="{% url 'ledger:transfer_list' %}" class="btn btn-outline-secondary">Cancel</a>
+    {% endif %}
+</form>
+{% endblock %}

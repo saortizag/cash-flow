@@ -1,0 +1,49 @@
+{% extends "ledger/base.html" %}
+{% block title %}Transfer — Cash{% endblock %}
+{% block content %}
+<h1 class="mb-4">Transfer</h1>
+
+<div class="card mb-4">
+    <div class="card-body">
+        <p class="fs-5 mb-3">
+            {{ transfer.out_leg.account.name|default:"Unassigned" }}
+            &rarr;
+            {{ transfer.in_leg.account.name|default:"Unassigned" }}:
+            <strong>{{ transfer.out_leg.amount }}</strong>
+        </p>
+        <dl class="row mb-0">
+            <dt class="col-sm-3">Due date</dt><dd class="col-sm-9">{{ transfer.out_leg.due_date }}</dd>
+            <dt class="col-sm-3">Description</dt><dd class="col-sm-9">{{ transfer.out_leg.description|default:"—" }}</dd>
+            <dt class="col-sm-3">Status</dt>
+            <dd class="col-sm-9">
+                {% if transfer.out_leg.executed %}
+                    <span class="badge text-bg-success">Executed {{ transfer.out_leg.executed_date }}</span>
+                {% else %}
+                    <span class="badge text-bg-secondary">Pending</span>
+                {% endif %}
+                {% if transfer.credit_card_statement %}
+                    <span class="badge text-bg-info">Card statement payment</span>
+                {% endif %}
+            </dd>
+        </dl>
+    </div>
+</div>
+
+<div class="btn-group mb-4">
+    {% if not transfer.out_leg.account %}
+        <a href="{% url 'ledger:transaction_assign_account' transfer.out_leg.pk %}" class="btn btn-primary">Assign source account</a>
+    {% elif not transfer.out_leg.executed %}
+        <a href="{% url 'ledger:transfer_execute' transfer.pk %}" class="btn btn-success">Execute</a>
+    {% else %}
+        <form method="post" action="{% url 'ledger:transfer_unexecute' transfer.pk %}" class="d-inline">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-outline-warning">Un-execute</button>
+        </form>
+    {% endif %}
+    {% if not transfer.out_leg.executed %}
+        <a href="{% url 'ledger:transfer_update' transfer.pk %}" class="btn btn-outline-secondary">Edit</a>
+        <a href="{% url 'ledger:transfer_delete' transfer.pk %}" class="btn btn-outline-danger">Delete</a>
+    {% endif %}
+    <a href="{% url 'ledger:transfer_list' %}" class="btn btn-outline-secondary">Back to Transfers</a>
+</div>
+{% endblock %}

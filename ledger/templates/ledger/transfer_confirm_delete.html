@@ -1,0 +1,14 @@
+{% extends "ledger/base.html" %}
+{% block title %}Delete transfer — Cash{% endblock %}
+{% block content %}
+<h1 class="mb-4">Delete transfer</h1>
+<p>
+    Delete the {{ transfer.out_leg.due_date }} transfer of {{ transfer.out_leg.amount }} from
+    {{ transfer.out_leg.account.name|default:"Unassigned" }} to {{ transfer.in_leg.account.name }}?
+</p>
+<form method="post">
+    {% csrf_token %}
+    <button type="submit" class="btn btn-danger">Delete</button>
+    <a href="{% url 'ledger:transfer_detail' transfer.pk %}" class="btn btn-outline-secondary">Cancel</a>
+</form>
+{% endblock %}

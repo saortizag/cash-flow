@@ -1,0 +1,17 @@
+{% extends "ledger/base.html" %}
+{% load django_bootstrap5 %}
+{% block title %}Execute transfer — Cash{% endblock %}
+{% block content %}
+<h1 class="mb-4">Execute transfer</h1>
+<p>
+    Executing will move {{ transfer.out_leg.amount }} from
+    <strong>{{ transfer.out_leg.account.name }}</strong> (currently {{ transfer.out_leg.account.current_balance }})
+    to <strong>{{ transfer.in_leg.account.name }}</strong> (currently {{ transfer.in_leg.account.current_balance }}).
+</p>
+<form method="post">
+    {% csrf_token %}
+    {% bootstrap_form form %}
+    {% bootstrap_button "Execute" button_type="submit" button_class="btn-success" %}
+    <a href="{% url 'ledger:transfer_detail' transfer.pk %}" class="btn btn-outline-secondary">Cancel</a>
+</form>
+{% endblock %}

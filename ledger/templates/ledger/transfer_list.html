@@ -1,0 +1,33 @@
+{% extends "ledger/base.html" %}
+{% block title %}Transfers — Cash{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1>Transfers</h1>
+    <a href="{% url 'ledger:transfer_create' %}" class="btn btn-primary">New transfer</a>
+</div>
+<table class="table table-sm">
+    <thead>
+    <tr><th>Due</th><th>From</th><th>To</th><th class="text-end">Amount</th><th>Status</th><th></th></tr>
+    </thead>
+    <tbody>
+    {% for transfer in transfers %}
+        <tr>
+            <td>{{ transfer.out_leg.due_date }}</td>
+            <td>{{ transfer.out_leg.account.name|default:"Unassigned" }}</td>
+            <td>{{ transfer.in_leg.account.name|default:"Unassigned" }}</td>
+            <td class="text-end">{{ transfer.out_leg.amount }}</td>
+            <td>
+                {% if transfer.out_leg.executed %}
+                    <span class="badge text-bg-success">Executed {{ transfer.out_leg.executed_date }}</span>
+                {% else %}
+                    <span class="badge text-bg-secondary">Pending</span>
+                {% endif %}
+            </td>
+            <td class="text-end"><a href="{% url 'ledger:transfer_detail' transfer.pk %}" class="btn btn-sm btn-outline-secondary">View</a></td>
+        </tr>
+    {% empty %}
+        <tr><td colspan="6" class="text-muted">No transfers yet.</td></tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% endblock %}
