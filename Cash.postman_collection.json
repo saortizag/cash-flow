@@ -1,0 +1,650 @@
+{
+  "info": {
+    "_postman_id": "b6a2f4d0-7e3a-4b8d-9c2f-3a1e6d8f5c90",
+    "name": "Cash API",
+    "description": "Personal cash-flow tracker REST API. JWT-authenticated (djangorestframework-simplejwt), versioned at /api/v1/. Every mutation routes through ledger/services.py, so the same business rules the web UI enforces apply here too — see each request's description for the specific rule it's demonstrating.\n\nQuick start:\n1. Set the `base_url`, `username`, `password` collection variables (defaults to http://127.0.0.1:8000).\n2. Run \"Auth > Obtain Token\" — it saves the access/refresh tokens into collection variables automatically. Every other request inherits the access token via collection-level Bearer auth.\n3. Access tokens last 1 hour; run \"Auth > Refresh Token\" to get a new one without logging in again.\n4. Create requests (Accounts, Categories, Transactions, ...) save the new row's id into a collection variable (e.g. {{account_id}}) so the folder's other requests work immediately without manual edits.\n\nInteractive OpenAPI docs are always available at {{base_url}}/api/docs/.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      { "key": "token", "value": "{{access_token}}", "type": "string" }
+    ]
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://127.0.0.1:8000", "type": "string" },
+    { "key": "username", "value": "", "type": "string" },
+    { "key": "password", "value": "", "type": "string" },
+    { "key": "access_token", "value": "", "type": "string" },
+    { "key": "refresh_token", "value": "", "type": "string" },
+    { "key": "account_id", "value": "", "type": "string" },
+    { "key": "second_account_id", "value": "", "type": "string" },
+    { "key": "credit_card_account_id", "value": "", "type": "string" },
+    { "key": "category_id", "value": "", "type": "string" },
+    { "key": "transaction_id", "value": "", "type": "string" },
+    { "key": "executed_transaction_id", "value": "", "type": "string" },
+    { "key": "unassigned_transaction_id", "value": "", "type": "string" },
+    { "key": "recurring_id", "value": "", "type": "string" },
+    { "key": "transfer_id", "value": "", "type": "string" },
+    { "key": "statement_id", "value": "", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Obtain Token",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{username}}\",\n  \"password\": \"{{password}}\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/api/token/", "host": ["{{base_url}}"], "path": ["api", "token", ""] },
+            "description": "Log in with your normal Cash username/password to get a JWT access + refresh pair. No auth header needed for this request itself."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "var data = pm.response.json();",
+                  "pm.collectionVariables.set('access_token', data.access);",
+                  "pm.collectionVariables.set('refresh_token', data.refresh);",
+                  "pm.test('got access + refresh tokens', () => {",
+                  "    pm.expect(data.access).to.be.a('string');",
+                  "    pm.expect(data.refresh).to.be.a('string');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refresh Token",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh\": \"{{refresh_token}}\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/api/token/refresh/", "host": ["{{base_url}}"], "path": ["api", "token", "refresh", ""] },
+            "description": "Access tokens last 1 hour. Exchange the refresh token (14 days) for a new access token without re-entering a password."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "var data = pm.response.json();",
+                  "pm.collectionVariables.set('access_token', data.access);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Accounts",
+      "item": [
+        {
+          "name": "List Accounts",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/v1/accounts/", "host": ["{{base_url}}"], "path": ["api", "v1", "accounts", ""] }
+          }
+        },
+        {
+          "name": "Create Account",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Postman Checking\",\n  \"account_type\": \"checking\",\n  \"current_balance\": \"1000.00\",\n  \"is_active\": true\n}"
+            },
+            "url": { "raw": "{{base_url}}/api/v1/accounts/", "host": ["{{base_url}}"], "path": ["api", "v1", "accounts", ""] },
+            "description": "account_type: cash | checking | savings | credit_card | other. current_balance uses a negative convention for credit cards (e.g. -450.00 = you owe 450)."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": ["var data = pm.response.json();", "if (data.id) pm.collectionVariables.set('account_id', data.id);"] }
+            }
+          ]
+        },
+        {
+          "name": "Create Second Account (for transfers)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Postman Savings\",\n  \"account_type\": \"savings\",\n  \"current_balance\": \"500.00\",\n  \"is_active\": true\n}"
+            },
+            "url": { "raw": "{{base_url}}/api/v1/accounts/", "host": ["{{base_url}}"], "path": ["api", "v1", "accounts", ""] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": ["var data = pm.response.json();", "if (data.id) pm.collectionVariables.set('second_account_id', data.id);"] }
+            }
+          ]
+        },
+        {
+          "name": "Create Credit Card Account",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Postman Visa\",\n  \"account_type\": \"credit_card\",\n  \"current_balance\": \"0.00\",\n  \"is_active\": true,\n  \"cut_day\": 24,\n  \"payment_due_day\": 5\n}"
+            },
+            "url": { "raw": "{{base_url}}/api/v1/accounts/", "host": ["{{base_url}}"], "path": ["api", "v1", "accounts", ""] },
+            "description": "cut_day / payment_due_day (1-31) drive automatic statement cycling — see Credit Card Statements folder."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": ["var data = pm.response.json();", "if (data.id) pm.collectionVariables.set('credit_card_account_id', data.id);"] }
+            }
+          ]
+        },
+        {
+          "name": "Retrieve Account",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/v1/accounts/{{account_id}}/", "host": ["{{base_url}}"], "path": ["api", "v1", "accounts", "{{account_id}}", ""] }
+          }
+        },
+        {
+          "name": "Update Account",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"current_balance\": \"1200.00\"\n}" },
+            "url": { "raw": "{{base_url}}/api/v1/accounts/{{account_id}}/", "host": ["{{base_url}}"], "path": ["api", "v1", "accounts", "{{account_id}}", ""] },
+            "description": "current_balance is directly editable at any time (opening balance / reconciling against a real statement)."
+          }
+        },
+        {
+          "name": "Bootstrap Credit Card Statement",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"amount_owed\": \"500.00\",\n  \"due_date\": \"2026-09-05\"\n}" },
+            "url": { "raw": "{{base_url}}/api/v1/accounts/{{credit_card_account_id}}/bootstrap-statement/", "host": ["{{base_url}}"], "path": ["api", "v1", "accounts", "{{credit_card_account_id}}", "bootstrap-statement", ""] },
+            "description": "'I already owe X, due D' for a card with no itemized purchase history yet. Sets current_balance to -amount_owed and creates a CreditCardStatement. Only valid for account_type=credit_card (returns 400 otherwise).\n\nNote: once this runs, credit_card_account_id can no longer be deleted (only deactivated) — a CreditCardStatement now references it via a PROTECT foreign key. See Cleanup at the end of this collection."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": ["var data = pm.response.json();", "if (data.id) pm.collectionVariables.set('statement_id', data.id);"] }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Categories",
+      "item": [
+        {
+          "name": "List Categories",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/v1/categories/", "host": ["{{base_url}}"], "path": ["api", "v1", "categories", ""] }
+          }
+        },
+        {
+          "name": "Create Category",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Groceries\",\n  \"description\": \"\",\n  \"typical_direction\": \"OUT\"\n}" },
+            "url": { "raw": "{{base_url}}/api/v1/categories/", "host": ["{{base_url}}"], "path": ["api", "v1", "categories", ""] },
+            "description": "typical_direction: IN | OUT | BOTH."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": ["var data = pm.response.json();", "if (data.id) pm.collectionVariables.set('category_id', data.id);"] }
+            }
+          ]
+        },
+        {
+          "name": "Retrieve Category",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/v1/categories/{{category_id}}/", "host": ["{{base_url}}"], "path": ["api", "v1", "categories", "{{category_id}}", ""] }
+          }
+        },
+        {
+          "name": "Update Category",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Food\"\n}" },
+            "url": { "raw": "{{base_url}}/api/v1/categories/{{category_id}}/", "host": ["{{base_url}}"], "path": ["api", "v1", "categories", "{{category_id}}", ""] }
+          }
+        },
+        {
+          "name": "Delete Category",
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{base_url}}/api/v1/categories/{{category_id}}/", "host": ["{{base_url}}"], "path": ["api", "v1", "categories", "{{category_id}}", ""] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Transactions",
+      "item": [
+        {
+          "name": "List Transactions",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/v1/transactions/?executed=false",
+              "host": ["{{base_url}}"], "path": ["api", "v1", "transactions", ""],
+              "query": [
+                { "key": "account", "value": "{{account_id}}", "disabled": true, "description": "an account id, or the literal string 'unassigned'" },
+                { "key": "category", "value": "{{category_id}}", "disabled": true },
+                { "key": "executed", "value": "false", "description": "true | false" },
+                { "key": "direction", "value": "OUT", "disabled": true, "description": "IN | OUT" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Transaction (pending)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"account\": {{account_id}},\n  \"category\": null,\n  \"direction\": \"OUT\",\n  \"amount\": \"50.00\",\n  \"description\": \"Weekly groceries\",\n  \"due_date\": \"2026-09-01\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/api/v1/transactions/", "host": ["{{base_url}}"], "path": ["api", "v1", "transactions", ""] },
+            "description": "executed defaults to false — a pending transaction never affects account balance until executed. direction: IN | OUT."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": ["var data = pm.response.json();", "if (data.id) pm.collectionVariables.set('transaction_id', data.id);"] }
+            }
+          ]
+        },
+        {
+          "name": "Create Transaction (already executed)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"account\": {{account_id}},\n  \"category\": null,\n  \"direction\": \"IN\",\n  \"amount\": \"200.00\",\n  \"description\": \"Freelance payment\",\n  \"due_date\": \"2026-08-15\",\n  \"executed\": true\n}"
+            },
+            "url": { "raw": "{{base_url}}/api/v1/transactions/", "host": ["{{base_url}}"], "path": ["api", "v1", "transactions", ""] },
+            "description": "Logs something that already happened — applies the balance effect immediately. Requires `account` to be set (400 otherwise). `executed_date` defaults to today if omitted."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": ["var data = pm.response.json();", "if (data.id) pm.collectionVariables.set('executed_transaction_id', data.id);"] }
+            }
+          ]
+        },
+        {
+          "name": "Create Unassigned Transaction",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"account\": null,\n  \"category\": null,\n  \"direction\": \"OUT\",\n  \"amount\": \"75.00\",\n  \"description\": \"I'll owe this, haven't picked a funding account yet\",\n  \"due_date\": \"2026-09-10\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/api/v1/transactions/", "host": ["{{base_url}}"], "path": ["api", "v1", "transactions", ""] },
+            "description": "account=null records a future obligation with no funding account decided yet. Shows up in /api/v1/summary/'s 'unassigned' list and in the combined (not per-account) projection until assigned."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": ["var data = pm.response.json();", "if (data.id) pm.collectionVariables.set('unassigned_transaction_id', data.id);"] }
+            }
+          ]
+        },
+        {
+          "name": "Retrieve Transaction",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/v1/transactions/{{transaction_id}}/", "host": ["{{base_url}}"], "path": ["api", "v1", "transactions", "{{transaction_id}}", ""] }
+          }
+        },
+        {
+          "name": "Update Transaction (full edit, unexecuted only)",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"amount\": \"55.00\",\n  \"description\": \"Weekly groceries (updated)\"\n}" },
+            "url": { "raw": "{{base_url}}/api/v1/transactions/{{transaction_id}}/", "host": ["{{base_url}}"], "path": ["api", "v1", "transactions", "{{transaction_id}}", ""] },
+            "description": "account/direction/amount are only editable while the transaction is unexecuted — returns 400 if you try to change them on an executed transaction (category/description/due_date remain editable either way)."
+          }
+        },
+        {
+          "name": "Execute Transaction",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{}" },
+            "url": { "raw": "{{base_url}}/api/v1/transactions/{{transaction_id}}/execute/", "host": ["{{base_url}}"], "path": ["api", "v1", "transactions", "{{transaction_id}}", "execute", ""] },
+            "description": "Applies the balance effect and sets executed=true. Optional body: {\"executed_date\": \"YYYY-MM-DD\"} (defaults to today). Requires an account to be assigned first (400 otherwise)."
+          }
+        },
+        {
+          "name": "Unexecute Transaction",
+          "request": {
+            "method": "POST",
+            "url": { "raw": "{{base_url}}/api/v1/transactions/{{transaction_id}}/unexecute/", "host": ["{{base_url}}"], "path": ["api", "v1", "transactions", "{{transaction_id}}", "unexecute", ""] },
+            "description": "Reverses the balance effect and sets executed=false."
+          }
+        },
+        {
+          "name": "Assign Account (unassigned transaction)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"account\": {{account_id}}\n}" },
+            "url": { "raw": "{{base_url}}/api/v1/transactions/{{unassigned_transaction_id}}/assign-account/", "host": ["{{base_url}}"], "path": ["api", "v1", "transactions", "{{unassigned_transaction_id}}", "assign-account", ""] },
+            "description": "The only way to attach a funding account to a previously-unassigned transaction. Also the one action still allowed on an unassigned transfer leg (e.g. a credit-card statement's auto-generated payment obligation)."
+          }
+        },
+        {
+          "name": "Delete Transaction",
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{base_url}}/api/v1/transactions/{{transaction_id}}/", "host": ["{{base_url}}"], "path": ["api", "v1", "transactions", "{{transaction_id}}", ""] },
+            "description": "Returns 400 if the transaction is executed (un-execute first) or if it's one leg of a transfer (delete the transfer instead, via /api/v1/transfers/)."
+          }
+        },
+        {
+          "name": "Unexecute \"already executed\" Transaction",
+          "request": {
+            "method": "POST",
+            "url": { "raw": "{{base_url}}/api/v1/transactions/{{executed_transaction_id}}/unexecute/", "host": ["{{base_url}}"], "path": ["api", "v1", "transactions", "{{executed_transaction_id}}", "unexecute", ""] },
+            "description": "Cleanup step for the 'Create Transaction (already executed)' request above — a transaction must be unexecuted before it can be deleted."
+          }
+        },
+        {
+          "name": "Delete \"already executed\" Transaction",
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{base_url}}/api/v1/transactions/{{executed_transaction_id}}/", "host": ["{{base_url}}"], "path": ["api", "v1", "transactions", "{{executed_transaction_id}}", ""] }
+          }
+        },
+        {
+          "name": "Delete Unassigned Transaction",
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{base_url}}/api/v1/transactions/{{unassigned_transaction_id}}/", "host": ["{{base_url}}"], "path": ["api", "v1", "transactions", "{{unassigned_transaction_id}}", ""] },
+            "description": "Cleanup step — by this point it's been assigned to account_id (via the Assign Account request above) but never executed, so it deletes cleanly."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Recurring Transactions",
+      "item": [
+        {
+          "name": "List Recurring Transactions",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/v1/recurring-transactions/", "host": ["{{base_url}}"], "path": ["api", "v1", "recurring-transactions", ""] }
+          }
+        },
+        {
+          "name": "Create Recurring Transaction",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"account\": {{account_id}},\n  \"category\": null,\n  \"direction\": \"OUT\",\n  \"amount\": \"20.00\",\n  \"description\": \"Netflix\",\n  \"frequency\": \"monthly\",\n  \"interval\": 1,\n  \"start_date\": \"2026-08-15\",\n  \"is_active\": true\n}"
+            },
+            "url": { "raw": "{{base_url}}/api/v1/recurring-transactions/", "host": ["{{base_url}}"], "path": ["api", "v1", "recurring-transactions", ""] },
+            "description": "frequency: weekly | monthly | quarterly | yearly. interval repeats every N periods (e.g. weekly + interval=2 = biweekly). Creating immediately materializes pending Transaction rows out to a 12-month horizon."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": ["var data = pm.response.json();", "if (data.id) pm.collectionVariables.set('recurring_id', data.id);"] }
+            }
+          ]
+        },
+        {
+          "name": "Retrieve Recurring Transaction",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/v1/recurring-transactions/{{recurring_id}}/", "host": ["{{base_url}}"], "path": ["api", "v1", "recurring-transactions", "{{recurring_id}}", ""] }
+          }
+        },
+        {
+          "name": "Update Recurring Transaction",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"amount\": \"25.00\"\n}" },
+            "url": { "raw": "{{base_url}}/api/v1/recurring-transactions/{{recurring_id}}/", "host": ["{{base_url}}"], "path": ["api", "v1", "recurring-transactions", "{{recurring_id}}", ""] },
+            "description": "Regenerates every future unexecuted occurrence with the new field values. Executed/overdue occurrences already in the past are left untouched. end_date (if set) must be on or after start_date (400 otherwise)."
+          }
+        },
+        {
+          "name": "Deactivate Recurring Transaction",
+          "request": {
+            "method": "POST",
+            "url": { "raw": "{{base_url}}/api/v1/recurring-transactions/{{recurring_id}}/deactivate/", "host": ["{{base_url}}"], "path": ["api", "v1", "recurring-transactions", "{{recurring_id}}", "deactivate", ""] },
+            "description": "Stops generating new occurrences and removes future unexecuted ones. History (executed occurrences) is kept."
+          }
+        },
+        {
+          "name": "Delete Recurring Transaction",
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{base_url}}/api/v1/recurring-transactions/{{recurring_id}}/", "host": ["{{base_url}}"], "path": ["api", "v1", "recurring-transactions", "{{recurring_id}}", ""] },
+            "description": "Hard-deletes the template. Future unexecuted occurrences are removed too; executed/overdue history survives with recurring_source cleared."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Transfers",
+      "item": [
+        {
+          "name": "List Transfers",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/v1/transfers/", "host": ["{{base_url}}"], "path": ["api", "v1", "transfers", ""] }
+          }
+        },
+        {
+          "name": "Create Transfer",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"from_account\": {{account_id}},\n  \"to_account\": {{second_account_id}},\n  \"amount\": \"100.00\",\n  \"description\": \"Move to savings\",\n  \"due_date\": \"2026-09-01\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/api/v1/transfers/", "host": ["{{base_url}}"], "path": ["api", "v1", "transfers", ""] },
+            "description": "from_account may be omitted/null (an obligation with no funding account decided yet — that's how an auto-generated credit-card payment starts out). Same account for from/to, or executed=true with no from_account, both return 400."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": ["var data = pm.response.json();", "if (data.id) pm.collectionVariables.set('transfer_id', data.id);"] }
+            }
+          ]
+        },
+        {
+          "name": "Retrieve Transfer",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/v1/transfers/{{transfer_id}}/", "host": ["{{base_url}}"], "path": ["api", "v1", "transfers", "{{transfer_id}}", ""] }
+          }
+        },
+        {
+          "name": "Update Transfer",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"amount\": \"150.00\",\n  \"description\": \"Move to savings (updated)\",\n  \"due_date\": \"2026-09-05\"\n}" },
+            "url": { "raw": "{{base_url}}/api/v1/transfers/{{transfer_id}}/", "host": ["{{base_url}}"], "path": ["api", "v1", "transfers", "{{transfer_id}}", ""] },
+            "description": "Only amount/description/due_date — accounts aren't reassignable after creation (delete and recreate instead). 400 if the transfer is already executed."
+          }
+        },
+        {
+          "name": "Execute Transfer",
+          "request": {
+            "method": "POST",
+            "url": { "raw": "{{base_url}}/api/v1/transfers/{{transfer_id}}/execute/", "host": ["{{base_url}}"], "path": ["api", "v1", "transfers", "{{transfer_id}}", "execute", ""] },
+            "description": "Moves the amount from from_account to to_account atomically (both legs execute together, or neither does). 400 if from_account isn't set yet — assign one first via the transaction assign-account action on the transfer's out leg."
+          }
+        },
+        {
+          "name": "Unexecute Transfer",
+          "request": {
+            "method": "POST",
+            "url": { "raw": "{{base_url}}/api/v1/transfers/{{transfer_id}}/unexecute/", "host": ["{{base_url}}"], "path": ["api", "v1", "transfers", "{{transfer_id}}", "unexecute", ""] }
+          }
+        },
+        {
+          "name": "Delete Transfer",
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{base_url}}/api/v1/transfers/{{transfer_id}}/", "host": ["{{base_url}}"], "path": ["api", "v1", "transfers", "{{transfer_id}}", ""] },
+            "description": "400 if executed (un-execute first). Deletes both linked transaction legs."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Credit Card Statements",
+      "item": [
+        {
+          "name": "List Credit Card Statements",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/v1/credit-card-statements/", "host": ["{{base_url}}"], "path": ["api", "v1", "credit-card-statements", ""] },
+            "description": "Read-only — statements are produced by bootstrap-statement or by the automatic cut-date cycling, never created/edited directly."
+          }
+        },
+        {
+          "name": "Retrieve Credit Card Statement",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/v1/credit-card-statements/{{statement_id}}/", "host": ["{{base_url}}"], "path": ["api", "v1", "credit-card-statements", "{{statement_id}}", ""] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Reporting",
+      "item": [
+        {
+          "name": "Summary",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/v1/summary/", "host": ["{{base_url}}"], "path": ["api", "v1", "summary", ""] },
+            "description": "Assets / card debt / net worth across active accounts, plus overdue, upcoming (max 10), and unassigned pending transactions — the same numbers the dashboard page shows."
+          }
+        },
+        {
+          "name": "Projection Summary",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/v1/projection/summary/?target_date=2026-12-31",
+              "host": ["{{base_url}}"], "path": ["api", "v1", "projection", "summary", ""],
+              "query": [
+                { "key": "target_date", "value": "2026-12-31" },
+                { "key": "account", "value": "{{account_id}}", "disabled": true, "description": "omit for all accounts combined" }
+              ]
+            },
+            "description": "Current + projected balance per account (and combined) as of target_date, counting every still-pending transaction due by then. No per-transaction rows — see Projection Detail for those."
+          }
+        },
+        {
+          "name": "Projection Detail",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/api/v1/projection/detail/?target_date=2026-12-31",
+              "host": ["{{base_url}}"], "path": ["api", "v1", "projection", "detail", ""],
+              "query": [
+                { "key": "target_date", "value": "2026-12-31" },
+                { "key": "account", "value": "{{account_id}}", "disabled": true, "description": "omit for all accounts combined" }
+              ]
+            },
+            "description": "Same as Projection Summary, plus the full per-transaction running-balance table for each account (and unassigned obligations, only when no specific account is picked)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Docs",
+      "item": [
+        {
+          "name": "OpenAPI Schema",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/schema/", "host": ["{{base_url}}"], "path": ["api", "schema", ""] },
+            "description": "Machine-readable OpenAPI 3 schema (drf-spectacular) — import this into Postman's API tooling or any other OpenAPI-aware client for a fully generated request set."
+          }
+        },
+        {
+          "name": "Swagger UI",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/docs/", "host": ["{{base_url}}"], "path": ["api", "docs", ""] },
+            "description": "Human-friendly interactive docs — open this URL in a browser rather than Postman."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Cleanup",
+      "description": "Removes the throwaway accounts created earlier in a full run. Placed last on purpose — account_id/second_account_id/credit_card_account_id are referenced throughout the Transactions/Recurring Transactions/Transfers/Reporting folders above, so deleting them any earlier would break those requests.",
+      "item": [
+        {
+          "name": "Delete Account",
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{base_url}}/api/v1/accounts/{{account_id}}/", "host": ["{{base_url}}"], "path": ["api", "v1", "accounts", "{{account_id}}", ""] }
+          }
+        },
+        {
+          "name": "Delete Second Account",
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{base_url}}/api/v1/accounts/{{second_account_id}}/", "host": ["{{base_url}}"], "path": ["api", "v1", "accounts", "{{second_account_id}}", ""] }
+          }
+        },
+        {
+          "name": "Deactivate Credit Card Account",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"is_active\": false\n}" },
+            "url": { "raw": "{{base_url}}/api/v1/accounts/{{credit_card_account_id}}/", "host": ["{{base_url}}"], "path": ["api", "v1", "accounts", "{{credit_card_account_id}}", ""] },
+            "description": "Deactivate rather than delete: once Bootstrap Credit Card Statement has run, a CreditCardStatement references this account via a PROTECT foreign key, so DELETE would return 400. This is the same 'deactivate instead' remedy the app's own template UI relies on for any account with history — there's no way to delete a statement's history through this API, by design."
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -130,8 +130,13 @@ dependencies:
       - cycler==0.12.1
       - django==6.1
       - django-bootstrap5==26.2
+      - django-filter==26.1
+      - djangorestframework==3.18.0
+      - djangorestframework-simplejwt==5.5.1
+      - drf-spectacular==0.30.0
       - fonttools==4.63.0
       - greenlet==3.5.5
+      - inflection==0.5.1
       - kiwisolver==1.5.0
       - matplotlib==3.11.1
       - narwhals==2.24.0
@@ -141,9 +146,11 @@ dependencies:
       - plotly==6.9.0
       - psycopg==3.3.4
       - psycopg-binary==3.3.4
+      - pyjwt==2.13.0
       - pyparsing==3.3.2
       - python-dotenv==1.2.2
       - scipy==1.18.0
       - sqlalchemy==2.0.51
       - sqlparse==0.5.5
+      - uritemplate==4.2.0
 prefix: /home/santiago/miniconda3/envs/web

@@ -489,3 +489,100 @@ def close_statements_if_due_for_all_cards(today=None):
             card.save(update_fields=['next_statement_cut_date', 'updated_at'])
         results[card.pk] = close_statement_if_due(card, today=today)
     return results
+
+
+# ---------- Reporting (read-only aggregation) ----------
+# Pure read functions, no mutation — the single source of truth for the
+# dashboard/projection numbers, shared between the ledger templates and the
+# api app so the two surfaces can never silently disagree on the arithmetic.
+
+def account_summary(today=None):
+    """Assets / card debt / net worth across active accounts (credit-card
+    negative-balance convention — see Account docstring), plus overdue,
+    upcoming (capped at 10), and unassigned pending transactions."""
+    today = today or timezone.localdate()
+    accounts = Account.objects.filter(is_active=True)
+    asset_accounts = [a for a in accounts if a.account_type != Account.AccountType.CREDIT_CARD]
+    card_accounts = [a for a in accounts if a.account_type == Account.AccountType.CREDIT_CARD]
+    total_assets = sum((a.current_balance for a in asset_accounts), start=Decimal('0.00'))
+    total_card_debt = -sum((a.current_balance for a in card_accounts), start=Decimal('0.00'))
+    net_worth = total_assets - total_card_debt
+
+    # transfer_as_source/transfer_as_destination are select_related (not
+    # prefetch_related) even though they're reverse relations — Django
+    # supports this for O2O specifically, since it's still a single-row join.
+    # Needed so API serialization of these transactions (is_transfer_leg)
+    # doesn't trigger up to two extra queries per row.
+    overdue = Transaction.objects.filter(
+        executed=False, due_date__lt=today, account__isnull=False,
+    ).select_related('account', 'category', 'transfer_as_source', 'transfer_as_destination')
+    upcoming = Transaction.objects.filter(
+        executed=False, due_date__gte=today, account__isnull=False,
+    ).select_related('account', 'category', 'transfer_as_source', 'transfer_as_destination')[:10]
+    unassigned = Transaction.objects.filter(
+        executed=False, account__isnull=True,
+    ).select_related('category', 'transfer_as_source', 'transfer_as_destination').order_by('due_date')
+
+    return {
+        'accounts': accounts,
+        'total_assets': total_assets,
+        'total_card_debt': total_card_debt,
+        'net_worth': net_worth,
+        'overdue': overdue,
+        'upcoming': upcoming,
+        'unassigned': unassigned,
+    }
+
+
+def project_balances(target_date, account=None):
+    """Per-account (or single `account`, if given) running balance walk to
+    target_date: starts from current_balance and applies signed_amount for
+    every unexecuted transaction due by target_date, in chronological order.
+    Also returns combined current/projected totals. Unassigned pending
+    obligations are only folded in (as their own rows/total, added to
+    combined_projected) when account is None — attributing them to one
+    specific account's projection would be arbitrary."""
+    accounts = [account] if account else list(Account.objects.filter(is_active=True))
+
+    results = []
+    for acct in accounts:
+        pending = Transaction.objects.filter(
+            account=acct, executed=False, due_date__lte=target_date,
+        ).select_related('category', 'transfer_as_source', 'transfer_as_destination').order_by('due_date', 'id')
+        running = acct.current_balance
+        rows = []
+        for txn in pending:
+            running += signed_amount(txn.direction, txn.amount)
+            rows.append({'transaction': txn, 'running_balance': running})
+        results.append({
+            'account': acct,
+            'current_balance': acct.current_balance,
+            'projected_balance': running,
+            'rows': rows,
+        })
+
+    combined_current = sum((r['current_balance'] for r in results), Decimal('0.00'))
+    combined_projected = sum((r['projected_balance'] for r in results), Decimal('0.00'))
+
+    # See project_balances docstring: unassigned obligations belong to no
+    # specific account, so they only ever factor into the "all accounts
+    # combined" view, never a single-account one.
+    unassigned_rows = []
+    unassigned_total = Decimal('0.00')
+    if account is None:
+        unassigned_pending = Transaction.objects.filter(
+            account__isnull=True, executed=False, due_date__lte=target_date,
+        ).select_related('category', 'transfer_as_source', 'transfer_as_destination').order_by('due_date', 'id')
+        for txn in unassigned_pending:
+            unassigned_total += signed_amount(txn.direction, txn.amount)
+            unassigned_rows.append({'transaction': txn, 'running_total': unassigned_total})
+        combined_projected += unassigned_total
+
+    return {
+        'results': results,
+        'target_date': target_date,
+        'combined_current': combined_current,
+        'combined_projected': combined_projected,
+        'unassigned_rows': unassigned_rows,
+        'unassigned_total': unassigned_total,
+    }

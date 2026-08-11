@@ -1,5 +1,3 @@
-from decimal import Decimal
-
 from dateutil.relativedelta import relativedelta
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -43,33 +41,7 @@ def _transfer_for_leg(txn):
 def dashboard(request):
     services.ensure_recurring_horizon_for_all_active()
     services.close_statements_if_due_for_all_cards()
-    today = timezone.localdate()
-    accounts = Account.objects.filter(is_active=True)
-    asset_accounts = [a for a in accounts if a.account_type != Account.AccountType.CREDIT_CARD]
-    card_accounts = [a for a in accounts if a.account_type == Account.AccountType.CREDIT_CARD]
-    total_assets = sum((a.current_balance for a in asset_accounts), start=Decimal('0.00'))
-    total_card_debt = -sum((a.current_balance for a in card_accounts), start=Decimal('0.00'))
-    net_worth = total_assets - total_card_debt
-
-    overdue = Transaction.objects.filter(
-        executed=False, due_date__lt=today, account__isnull=False,
-    ).select_related('account', 'category')
-    upcoming = Transaction.objects.filter(
-        executed=False, due_date__gte=today, account__isnull=False,
-    ).select_related('account', 'category')[:10]
-    unassigned = Transaction.objects.filter(
-        executed=False, account__isnull=True,
-    ).select_related('category').order_by('due_date')
-
-    return render(request, 'ledger/dashboard.html', {
-        'accounts': accounts,
-        'total_assets': total_assets,
-        'total_card_debt': total_card_debt,
-        'net_worth': net_worth,
-        'overdue': overdue,
-        'upcoming': upcoming,
-        'unassigned': unassigned,
-    })
+    return render(request, 'ledger/dashboard.html', services.account_summary())
 
 
 # ---- Account CRUD ----
@@ -483,49 +455,6 @@ def projection_view(request):
     if form.is_valid():
         target_date = form.cleaned_data['target_date']
         picked_account = form.cleaned_data.get('account')
-        accounts = [picked_account] if picked_account else list(Account.objects.filter(is_active=True))
-
-        results = []
-        for acct in accounts:
-            pending = Transaction.objects.filter(
-                account=acct, executed=False, due_date__lte=target_date,
-            ).select_related('category').order_by('due_date', 'id')
-            running = acct.current_balance
-            rows = []
-            for txn in pending:
-                running += services.signed_amount(txn.direction, txn.amount)
-                rows.append({'transaction': txn, 'running_balance': running})
-            results.append({
-                'account': acct,
-                'current_balance': acct.current_balance,
-                'projected_balance': running,
-                'rows': rows,
-            })
-
-        combined_current = sum((r['current_balance'] for r in results), Decimal('0.00'))
-        combined_projected = sum((r['projected_balance'] for r in results), Decimal('0.00'))
-
-        # Unassigned obligations belong to no specific account, so they only
-        # ever factor into the "all accounts combined" view, never a
-        # single-account one (that would misattribute them to one account).
-        unassigned_rows = []
-        unassigned_total = Decimal('0.00')
-        if picked_account is None:
-            unassigned_pending = Transaction.objects.filter(
-                account__isnull=True, executed=False, due_date__lte=target_date,
-            ).select_related('category').order_by('due_date', 'id')
-            for txn in unassigned_pending:
-                unassigned_total += services.signed_amount(txn.direction, txn.amount)
-                unassigned_rows.append({'transaction': txn, 'running_total': unassigned_total})
-            combined_projected += unassigned_total
-
-        context.update({
-            'results': results,
-            'target_date': target_date,
-            'combined_current': combined_current,
-            'combined_projected': combined_projected,
-            'unassigned_rows': unassigned_rows,
-            'unassigned_total': unassigned_total,
-        })
+        context.update(services.project_balances(target_date, account=picked_account))
 
     return render(request, 'ledger/projection.html', context)

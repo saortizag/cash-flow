@@ -3,6 +3,7 @@ Django settings for cash project.
 """
 
 import os
+from datetime import timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -27,7 +28,11 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'django_bootstrap5',
+    'rest_framework',
+    'django_filters',
+    'drf_spectacular',
     'ledger',
+    'api',
 ]
 
 MIDDLEWARE = [
@@ -127,4 +132,40 @@ LOGOUT_REDIRECT_URL = 'login'
 
 BOOTSTRAP5 = {
     'required_css_class': 'required',
+}
+
+
+# Django REST Framework — the `api` app (JSON, JWT-authenticated, versioned
+# at /api/v1/). The template-based `ledger` app above is untouched by this.
+
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        # Session auth is included only so the browsable API works from a
+        # browser already logged into /admin/ during development — it is not
+        # how "other consumers" are expected to authenticate.
+        'rest_framework.authentication.SessionAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
+    'DEFAULT_FILTER_BACKENDS': [
+        'django_filters.rest_framework.DjangoFilterBackend',
+    ],
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 50,
+    'EXCEPTION_HANDLER': 'api.exceptions.custom_exception_handler',
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+}
+
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(hours=1),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=14),
+}
+
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'Cash API',
+    'DESCRIPTION': 'REST API for the Cash personal cash-flow tracker.',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
 }
