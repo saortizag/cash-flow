@@ -37,6 +37,10 @@ Django + PostgreSQL, server-rendered templates styled with Bootstrap
 - **Cash-flow projection** — pick a date, see current balance plus every
   still-pending transaction due by then, per account and combined, with a
   running balance at each step.
+- **REST API** (`/api/v1/`) — everything above, over JSON, for other
+  consumers (scripts, automations, a future mobile client). JWT-authenticated,
+  routes through the same `services.py` the templates use. See
+  [REST API](#rest-api) below.
 - **A git-based "mind"** (`ONEMIND.md` / `AGENTS.md`) — this repo also
   carries a persistent memory for AI coding agents working on it, stored as
   git objects on a hidden ref (`refs/mind/main`) that never shows up in
@@ -51,6 +55,7 @@ Django + PostgreSQL, server-rendered templates styled with Bootstrap
 | Backend | Django 6.1 |
 | Database | PostgreSQL (local) |
 | Frontend | Django templates + `django-bootstrap5` (no SPA, no JS build step) |
+| REST API | Django REST Framework, `djangorestframework-simplejwt` (JWT auth), `django-filter`, `drf-spectacular` (OpenAPI docs) |
 | Driver | `psycopg[binary]` (psycopg 3) |
 | Date math | `python-dateutil` (`relativedelta`, for month-end-safe recurring/cut-date math) |
 | Config | `python-dotenv` (`.env`, git-ignored) |
@@ -79,6 +84,15 @@ ledger/                     # the one app — everything lives here
 ├── templates/ledger/        one template per page (list/form/confirm/detail)
 └── tests/                   93 tests — see Testing below
 
+api/                        the REST API — no models of its own, no templates
+├── serializers.py           one per ledger model + action-only ones (execute, assign-account, ...)
+├── views.py                 ViewSets + reporting views, all calling ledger.services
+├── filters.py                django-filter FilterSet for the transaction list endpoint
+├── exceptions.py             translates services.py's ValidationError/ProtectedError into 400s
+├── urls.py                   /api/token/, /api/schema/, /api/docs/, /api/v1/...
+└── tests/                    55 tests — see Testing below
+
+Cash.postman_collection.json  importable Postman collection covering every endpoint (see REST API)
 ONEMIND.md, AGENTS.md         the git-based agent memory system (see Features)
 manage.py, requirements.txt, .env.example, .gitignore
 ```
@@ -236,16 +250,71 @@ cycle into the one that already closed).
 
 ---
 
+## REST API
+
+`api/` exposes the same functionality as JSON for other consumers — everything routes through
+`ledger/services.py`, the same functions the templates above call, so the two surfaces can never
+disagree on a balance.
+
+### Authentication
+
+JWT (`djangorestframework-simplejwt`). Get a token pair with your normal login credentials:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/token/ -d "username=<you>&password=<your password>"
+# {"access": "...", "refresh": "..."}
+```
+
+Send the access token on every request:
+
+```bash
+curl http://127.0.0.1:8000/api/v1/accounts/ -H "Authorization: Bearer <access>"
+```
+
+Access tokens last 1 hour; refresh at `/api/token/refresh/` with the refresh token (14 days).
+
+### Endpoints
+
+Interactive docs (OpenAPI/Swagger) are always up to date at `/api/docs/` — the table below is a
+quick reference. A ready-to-import **[Postman collection](Cash.postman_collection.json)** covers
+every endpoint below with working example bodies and a self-cleaning request order (run "Auth >
+Obtain Token" first, then anything else — see the collection's own description for details).
+
+| Resource | Path | Notes |
+|---|---|---|
+| Accounts | `/api/v1/accounts/` | CRUD; `POST .../{id}/bootstrap-statement/` records existing card debt |
+| Categories | `/api/v1/categories/` | CRUD |
+| Transactions | `/api/v1/transactions/` | CRUD (filter by `account` — incl. `unassigned` — `category`, `executed`, `direction`); `.../{id}/execute/`, `.../{id}/unexecute/`, `.../{id}/assign-account/` |
+| Recurring transactions | `/api/v1/recurring-transactions/` | CRUD; `.../{id}/deactivate/` |
+| Transfers | `/api/v1/transfers/` | CRUD (update is amount/description/due_date only — accounts aren't reassignable after creation); `.../{id}/execute/`, `.../{id}/unexecute/` |
+| Credit card statements | `/api/v1/credit-card-statements/` | Read-only |
+| Summary | `/api/v1/summary/` | Assets / card debt / net worth / overdue / upcoming / unassigned — the dashboard's numbers |
+| Projection | `/api/v1/projection/summary/`, `/api/v1/projection/detail/` | `?target_date=&account=`; detail adds the per-transaction running-balance rows |
+
+Same business rules as the UI apply everywhere: an executed transaction can't have its
+account/direction/amount changed (only category/description/due date — un-execute first);
+a transfer leg can't be edited/executed/deleted through the plain transaction endpoints (manage it
+via `/transfers/` instead — `assign-account` is the one exception, since that's how an
+auto-generated credit-card payment obligation gets funded); `ValidationError`/`ProtectedError`
+raised by `services.py` come back as clean `400` responses instead of crashing.
+
+---
+
 ## Testing
 
 ```bash
-python manage.py test ledger
+python manage.py test          # both apps
+python manage.py test ledger   # 93 tests — template views, services.py, forms
+python manage.py test api      # 55 tests — REST endpoints, auth, serializer validation
 ```
 
-93 tests, focused on the highest-risk logic: balance-mutation atomicity and
+148 tests total, focused on the highest-risk logic: balance-mutation atomicity and
 concurrency safety, recurring-generation date math (including month-end
 edge cases), credit-card statement claiming and cut-date seeding, transfer
-all-or-nothing execution, and unassigned-payment projection accuracy. Run
+all-or-nothing execution, unassigned-payment projection accuracy, and — on
+the API side — that the same business rules and numbers hold through JSON
+(auth, field-locking on executed transactions, transfer-leg guards, and
+summary/projection figures matching `services.py` called directly). Run
 this before trusting any change to `services.py`.
 
 Optional: `python manage.py generate_recurring_occurrences` /
