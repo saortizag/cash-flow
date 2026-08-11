@@ -1,0 +1,326 @@
+"""
+Serializers call straight into ledger.services for anything that mutates a
+balance or an executed flag — see ledger/services.py's module docstring for
+why that module is the only sanctioned path. Nothing here talks to
+Account.current_balance or Transaction.executed directly.
+"""
+
+from decimal import Decimal
+
+from rest_framework import serializers
+
+from ledger import services
+from ledger.models import (
+    Account,
+    Category,
+    CreditCardStatement,
+    RecurringTransaction,
+    Transaction,
+    Transfer,
+)
+
+
+class ActiveAccountFieldMixin:
+    """Restricts the `account` field's queryset to active accounts, OR'd with
+    the instance's current account if it's since been deactivated — mirrors
+    ledger.forms.ActiveAccountFieldMixin exactly, so an existing row pointed
+    at a now-archived account can still be edited (just not newly assigned to
+    another archived one)."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        queryset = Account.objects.filter(is_active=True)
+        instance = self.instance
+        if instance and getattr(instance, 'pk', None) and instance.account_id:
+            queryset = queryset | Account.objects.filter(pk=instance.account_id)
+        self.fields['account'].queryset = queryset
+
+
+class AccountSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Account
+        fields = [
+            'id', 'name', 'account_type', 'current_balance', 'is_active',
+            'cut_day', 'payment_due_day', 'next_statement_cut_date',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['next_statement_cut_date', 'created_at', 'updated_at']
+
+
+class CreditCardBootstrapSerializer(serializers.Serializer):
+    """'I owe X, due D' for a card with no itemized history yet. Mirrors
+    ledger.forms.CreditCardBootstrapForm minus the `account` field, which
+    comes from the URL instead. Maps to services.bootstrap_statement."""
+    amount_owed = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=Decimal('0.00'))
+    due_date = serializers.DateField()
+
+
+class CategorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Category
+        fields = ['id', 'name', 'description', 'typical_direction']
+
+
+class TransactionSerializer(ActiveAccountFieldMixin, serializers.ModelSerializer):
+    """Read + update. `executed`/`executed_date` are read-only here —
+    flipping them goes through the dedicated execute/unexecute actions,
+    matching ledger.forms.TransactionEditForm (which doesn't expose them at
+    all). Full account/direction/amount edits are only accepted while the
+    transaction is unexecuted; see validate()/update()."""
+
+    is_transfer_leg = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Transaction
+        fields = [
+            'id', 'account', 'category', 'direction', 'amount', 'description',
+            'due_date', 'executed', 'executed_date', 'recurring_source', 'statement',
+            'is_transfer_leg', 'created_at', 'updated_at',
+        ]
+        read_only_fields = [
+            'executed', 'executed_date', 'recurring_source', 'statement',
+            'created_at', 'updated_at',
+        ]
+
+    def get_is_transfer_leg(self, obj):
+        return bool(getattr(obj, 'transfer_as_source', None) or getattr(obj, 'transfer_as_destination', None))
+
+    def validate(self, attrs):
+        if self.instance is not None and self.instance.executed:
+            locked = {'account', 'direction', 'amount'} & set(attrs)
+            if locked:
+                raise serializers.ValidationError({
+                    field: 'Cannot change this field on an executed transaction. Un-execute it first.'
+                    for field in locked
+                })
+        return attrs
+
+    def update(self, instance, validated_data):
+        if instance.executed:
+            return services.update_transaction_open_fields(
+                instance,
+                category=validated_data.get('category', instance.category),
+                description=validated_data.get('description', instance.description),
+                due_date=validated_data.get('due_date', instance.due_date),
+            )
+        return services.update_transaction_full(
+            instance,
+            account=validated_data.get('account', instance.account),
+            category=validated_data.get('category', instance.category),
+            direction=validated_data.get('direction', instance.direction),
+            amount=validated_data.get('amount', instance.amount),
+            description=validated_data.get('description', instance.description),
+            due_date=validated_data.get('due_date', instance.due_date),
+        )
+
+
+class TransactionCreateSerializer(TransactionSerializer):
+    """Create only: executed/executed_date become writable, for logging a
+    transaction that already happened — matches
+    ledger.forms.TransactionCreateForm. services.create_transaction itself
+    enforces "executed requires an account"."""
+
+    class Meta(TransactionSerializer.Meta):
+        read_only_fields = ['recurring_source', 'statement', 'created_at', 'updated_at']
+
+    def create(self, validated_data):
+        return services.create_transaction(
+            account=validated_data.get('account'),
+            category=validated_data.get('category'),
+            direction=validated_data['direction'],
+            amount=validated_data['amount'],
+            description=validated_data.get('description', ''),
+            due_date=validated_data['due_date'],
+            executed=validated_data.get('executed', False),
+            executed_date=validated_data.get('executed_date'),
+        )
+
+
+class ExecuteSerializer(serializers.Serializer):
+    executed_date = serializers.DateField(required=False)
+
+
+class AssignAccountSerializer(serializers.Serializer):
+    account = serializers.PrimaryKeyRelatedField(queryset=Account.objects.filter(is_active=True))
+
+
+class RecurringTransactionSerializer(ActiveAccountFieldMixin, serializers.ModelSerializer):
+    class Meta:
+        model = RecurringTransaction
+        fields = [
+            'id', 'account', 'category', 'direction', 'amount', 'description',
+            'frequency', 'interval', 'start_date', 'end_date', 'is_active',
+            'generated_until', 'created_at', 'updated_at',
+        ]
+        read_only_fields = ['generated_until', 'created_at', 'updated_at']
+
+    def validate(self, attrs):
+        # RecurringTransaction.Meta.constraints enforces this at the DB level,
+        # but only a Django ModelForm's full_clean() surfaces it as a clean
+        # validation error automatically — a plain ModelSerializer does not,
+        # so it's replicated here (see ledger/models.py:
+        # recurring_end_date_after_start_date).
+        end_date = attrs.get('end_date', getattr(self.instance, 'end_date', None))
+        start_date = attrs.get('start_date', getattr(self.instance, 'start_date', None))
+        if end_date and start_date and end_date < start_date:
+            raise serializers.ValidationError({'end_date': 'End date must be on or after the start date.'})
+        return attrs
+
+    def create(self, validated_data):
+        recurring = super().create(validated_data)
+        services.ensure_recurring_horizon(recurring)
+        return recurring
+
+    def update(self, instance, validated_data):
+        recurring = super().update(instance, validated_data)
+        services.regenerate_future_occurrences(recurring)
+        return recurring
+
+
+class TransferSerializer(serializers.Serializer):
+    """Read + create. Flat shape mirroring ledger.forms.TransferCreateForm —
+    a Transfer is two linked Transaction rows (out_leg/in_leg) under the
+    hood, but that pairing isn't meaningful to an API consumer."""
+
+    id = serializers.IntegerField(read_only=True)
+    from_account = serializers.PrimaryKeyRelatedField(
+        queryset=Account.objects.filter(is_active=True), required=False, allow_null=True,
+    )
+    to_account = serializers.PrimaryKeyRelatedField(queryset=Account.objects.filter(is_active=True))
+    amount = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=Decimal('0.01'))
+    description = serializers.CharField(max_length=255, required=False, allow_blank=True, default='')
+    due_date = serializers.DateField()
+    executed = serializers.BooleanField(required=False, default=False)
+    executed_date = serializers.DateField(required=False, allow_null=True)
+    out_leg_id = serializers.IntegerField(read_only=True)
+    in_leg_id = serializers.IntegerField(read_only=True)
+    created_at = serializers.DateTimeField(read_only=True)
+
+    def to_representation(self, instance):
+        return {
+            'id': instance.pk,
+            'from_account': instance.out_leg.account_id,
+            'to_account': instance.in_leg.account_id,
+            'amount': instance.out_leg.amount,
+            'description': instance.out_leg.description,
+            'due_date': instance.out_leg.due_date,
+            'executed': instance.out_leg.executed,
+            'executed_date': instance.out_leg.executed_date,
+            'out_leg_id': instance.out_leg_id,
+            'in_leg_id': instance.in_leg_id,
+            'created_at': instance.created_at,
+        }
+
+    def validate(self, attrs):
+        # services.create_transfer enforces neither of these rules itself —
+        # both currently live only in ledger.forms.TransferCreateForm.clean(),
+        # replicated here verbatim.
+        from_account = attrs.get('from_account')
+        to_account = attrs.get('to_account')
+        if attrs.get('executed') and not from_account:
+            raise serializers.ValidationError(
+                {'from_account': 'Assign a source account before marking this as already executed.'})
+        if from_account and to_account and from_account.pk == to_account.pk:
+            raise serializers.ValidationError({'to_account': 'Source and destination must be different accounts.'})
+        return attrs
+
+    def create(self, validated_data):
+        return services.create_transfer(
+            from_account=validated_data.get('from_account'),
+            to_account=validated_data['to_account'],
+            amount=validated_data['amount'],
+            description=validated_data.get('description', ''),
+            due_date=validated_data['due_date'],
+            executed=validated_data.get('executed', False),
+            executed_date=validated_data.get('executed_date'),
+        )
+
+
+class TransferUpdateSerializer(serializers.Serializer):
+    """Update only — amount/description/due_date, matching
+    ledger.forms.TransferEditForm exactly (accounts aren't reassignable;
+    services.update_transfer doesn't support that either — "delete and
+    recreate" covers that rare case, per its own docstring)."""
+
+    amount = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=Decimal('0.01'))
+    description = serializers.CharField(max_length=255, required=False, allow_blank=True, default='')
+    due_date = serializers.DateField()
+
+    def to_representation(self, instance):
+        return TransferSerializer(instance).data
+
+    def update(self, instance, validated_data):
+        return services.update_transfer(
+            instance,
+            amount=validated_data['amount'],
+            description=validated_data.get('description', ''),
+            due_date=validated_data['due_date'],
+        )
+
+
+class CreditCardStatementSerializer(serializers.ModelSerializer):
+    is_paid = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = CreditCardStatement
+        fields = [
+            'id', 'account', 'cut_date', 'due_date', 'statement_balance',
+            'payment_obligation', 'is_paid', 'created_at',
+        ]
+        read_only_fields = fields
+
+
+# ---------- Reporting (summary / projection) ----------
+# Read-only wrappers around the plain dicts services.account_summary() /
+# services.project_balances() return — see those functions' docstrings.
+
+class AccountSummarySerializer(serializers.Serializer):
+    total_assets = serializers.DecimalField(max_digits=10, decimal_places=2)
+    total_card_debt = serializers.DecimalField(max_digits=10, decimal_places=2)
+    net_worth = serializers.DecimalField(max_digits=10, decimal_places=2)
+    accounts = AccountSerializer(many=True)
+    overdue = TransactionSerializer(many=True)
+    upcoming = TransactionSerializer(many=True)
+    unassigned = TransactionSerializer(many=True)
+
+
+class ProjectionQuerySerializer(serializers.Serializer):
+    """Validates the ?target_date=&account= query params — mirrors
+    ledger.forms.ProjectionForm."""
+    target_date = serializers.DateField()
+    account = serializers.PrimaryKeyRelatedField(
+        queryset=Account.objects.filter(is_active=True), required=False, allow_null=True, default=None,
+    )
+
+
+class ProjectionRowSerializer(serializers.Serializer):
+    transaction = TransactionSerializer()
+    running_balance = serializers.DecimalField(max_digits=10, decimal_places=2)
+
+
+class UnassignedProjectionRowSerializer(serializers.Serializer):
+    transaction = TransactionSerializer()
+    running_total = serializers.DecimalField(max_digits=10, decimal_places=2)
+
+
+class ProjectionAccountSummarySerializer(serializers.Serializer):
+    account = AccountSerializer()
+    current_balance = serializers.DecimalField(max_digits=10, decimal_places=2)
+    projected_balance = serializers.DecimalField(max_digits=10, decimal_places=2)
+
+
+class ProjectionAccountDetailSerializer(ProjectionAccountSummarySerializer):
+    rows = ProjectionRowSerializer(many=True)
+
+
+class ProjectionSummarySerializer(serializers.Serializer):
+    target_date = serializers.DateField()
+    combined_current = serializers.DecimalField(max_digits=10, decimal_places=2)
+    combined_projected = serializers.DecimalField(max_digits=10, decimal_places=2)
+    unassigned_total = serializers.DecimalField(max_digits=10, decimal_places=2)
+    results = ProjectionAccountSummarySerializer(many=True)
+
+
+class ProjectionDetailSerializer(ProjectionSummarySerializer):
+    results = ProjectionAccountDetailSerializer(many=True)
+    unassigned_rows = UnassignedProjectionRowSerializer(many=True)
