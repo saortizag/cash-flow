@@ -37,6 +37,10 @@ Django + PostgreSQL, server-rendered templates styled with Bootstrap
 - **Cash-flow projection** — pick a date, see current balance plus every
   still-pending transaction due by then, per account and combined, with a
   running balance at each step.
+- **Support-file attachments** — an optional receipt, invoice, or statement
+  (PDF, image, or office doc, max 10MB) on any transaction or transfer.
+  Stored locally and only ever served back through an authenticated
+  download — never a public URL.
 - **REST API** (`/api/v1/`) — everything above, over JSON, for other
   consumers (scripts, automations, a future mobile client). JWT-authenticated,
   routes through the same `services.py` the templates use. See
@@ -82,7 +86,7 @@ ledger/                     # the one app — everything lives here
 ├── management/commands/
 │   └── generate_recurring_occurrences.py   manual/cron-friendly recurring sweep
 ├── templates/ledger/        one template per page (list/form/confirm/detail)
-└── tests/                   93 tests — see Testing below
+└── tests/                   113 tests — see Testing below
 
 api/                        the REST API — no models of its own, no templates
 ├── serializers.py           one per ledger model + action-only ones (execute, assign-account, ...)
@@ -90,8 +94,9 @@ api/                        the REST API — no models of its own, no templates
 ├── filters.py                django-filter FilterSet for the transaction list endpoint
 ├── exceptions.py             translates services.py's ValidationError/ProtectedError into 400s
 ├── urls.py                   /api/token/, /api/schema/, /api/docs/, /api/v1/...
-└── tests/                    55 tests — see Testing below
+└── tests/                    69 tests — see Testing below
 
+media/                       uploaded support files (git-ignored — see Features)
 Cash.postman_collection.json  importable Postman collection covering every endpoint (see REST API)
 ONEMIND.md, AGENTS.md         the git-based agent memory system (see Features)
 manage.py, requirements.txt, .env.example, .gitignore
@@ -221,6 +226,22 @@ projection's *combined* total (never a per-account one, since it isn't
 assigned to any account). This is also how a credit card statement's
 payment starts out: generated with no source account until you pick one.
 
+### Support files never touch a public URL
+
+`Transaction.attachment` (and `Transfer.attachment`, a property that reads from the transfer's
+`out_leg` — one file per transfer, not two) is a plain local `FileField`, restricted to a
+conservative extension allow-list plus a 10MB size cap. `MEDIA_ROOT` is configured but
+deliberately **not** wired into `urls.py` as a public static route — these can be financial
+documents, so the only way to read one back is `transaction_attachment_download` /
+`transfer_attachment_download` (and their `api/` equivalents), both behind the same login gate
+as everything else. Uploading, replacing, or clearing one is allowed regardless of a
+transaction/transfer's executed state (it's not a financial field), but is deliberately routed
+through its own dedicated view/action rather than the regular edit forms, to keep Django's
+`FileField` "no change" vs "clear" vs "replace" tri-state logic in one place. Replacing or
+deleting an attachment also deletes the old file from disk (not just the database reference) —
+via `transaction.on_commit`, so a rolled-back request never deletes a file a surviving row still
+points at.
+
 ### Recurring generation and statement cycling are both self-healing
 
 Both `ensure_recurring_horizon` and `close_statement_if_due` are checked
@@ -242,8 +263,8 @@ cycle into the one that already closed).
 | Dashboard | `/` | Assets / card debt / net worth, overdue & upcoming, unassigned obligations |
 | Accounts | `/accounts/` | Create/edit accounts; `/accounts/credit-card-bootstrap/` records existing card debt with no itemized history |
 | Categories | `/categories/` | Tag transactions for later breakdown |
-| Transactions | `/transactions/` | Create, edit, execute/un-execute, delete, assign an account |
-| Transfers | `/transfers/` | Move money between two accounts |
+| Transactions | `/transactions/` | Create, edit, execute/un-execute, delete, assign an account, attach a support file |
+| Transfers | `/transfers/` | Move money between two accounts, attach a support file |
 | Recurring | `/recurring/` | Templates that auto-generate future transactions |
 | Projection | `/projection/` | Pick a date, see the projected balance and what gets you there |
 | Admin | `/admin/` | Full model access, routed through `services.py` for the models that need it |
@@ -284,9 +305,9 @@ Obtain Token" first, then anything else — see the collection's own description
 |---|---|---|
 | Accounts | `/api/v1/accounts/` | CRUD; `POST .../{id}/bootstrap-statement/` records existing card debt |
 | Categories | `/api/v1/categories/` | CRUD |
-| Transactions | `/api/v1/transactions/` | CRUD (filter by `account` — incl. `unassigned` — `category`, `executed`, `direction`); `.../{id}/execute/`, `.../{id}/unexecute/`, `.../{id}/assign-account/` |
+| Transactions | `/api/v1/transactions/` | CRUD (filter by `account` — incl. `unassigned` — `category`, `executed`, `direction`); `.../{id}/execute/`, `.../{id}/unexecute/`, `.../{id}/assign-account/`; `.../{id}/attachment/` (GET downloads, POST sets/replaces, DELETE clears) |
 | Recurring transactions | `/api/v1/recurring-transactions/` | CRUD; `.../{id}/deactivate/` |
-| Transfers | `/api/v1/transfers/` | CRUD (update is amount/description/due_date only — accounts aren't reassignable after creation); `.../{id}/execute/`, `.../{id}/unexecute/` |
+| Transfers | `/api/v1/transfers/` | CRUD (update is amount/description/due_date only — accounts aren't reassignable after creation); `.../{id}/execute/`, `.../{id}/unexecute/`; `.../{id}/attachment/` (same GET/POST/DELETE shape as transactions) |
 | Credit card statements | `/api/v1/credit-card-statements/` | Read-only |
 | Summary | `/api/v1/summary/` | Assets / card debt / net worth / overdue / upcoming / unassigned — the dashboard's numbers |
 | Projection | `/api/v1/projection/summary/`, `/api/v1/projection/detail/` | `?target_date=&account=`; detail adds the per-transaction running-balance rows |
@@ -304,18 +325,18 @@ raised by `services.py` come back as clean `400` responses instead of crashing.
 
 ```bash
 python manage.py test          # both apps
-python manage.py test ledger   # 93 tests — template views, services.py, forms
-python manage.py test api      # 55 tests — REST endpoints, auth, serializer validation
+python manage.py test ledger   # 113 tests — template views, services.py, forms
+python manage.py test api      # 69 tests — REST endpoints, auth, serializer validation
 ```
 
-148 tests total, focused on the highest-risk logic: balance-mutation atomicity and
+182 tests total, focused on the highest-risk logic: balance-mutation atomicity and
 concurrency safety, recurring-generation date math (including month-end
 edge cases), credit-card statement claiming and cut-date seeding, transfer
-all-or-nothing execution, unassigned-payment projection accuracy, and — on
-the API side — that the same business rules and numbers hold through JSON
-(auth, field-locking on executed transactions, transfer-leg guards, and
-summary/projection figures matching `services.py` called directly). Run
-this before trusting any change to `services.py`.
+all-or-nothing execution, unassigned-payment projection accuracy, attachment
+validation/storage-cleanup/auth-gating, and — on the API side — that the same
+business rules and numbers hold through JSON (auth, field-locking on executed
+transactions, transfer-leg guards, and summary/projection figures matching
+`services.py` called directly). Run this before trusting any change to `services.py`.
 
 Optional: `python manage.py generate_recurring_occurrences` /
 `--horizon-months N` runs the same recurring sweep as a management command,

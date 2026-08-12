@@ -1,0 +1,24 @@
+{% extends "ledger/base.html" %}
+{% load django_bootstrap5 ledger_extras %}
+{% block title %}Attachment — Cash{% endblock %}
+{% block content %}
+<h1 class="mb-4">Attachment</h1>
+<p>
+    {{ transaction.due_date }} {{ transaction.get_direction_display }} of {{ transaction.amount|money }}
+    {% if transaction.description %}— {{ transaction.description }}{% endif %}
+</p>
+{% if attachment_name %}
+    <p>
+        Current file:
+        <a href="{% url 'ledger:transaction_attachment_download' transaction.pk %}">{{ attachment_name }}</a>
+    </p>
+{% else %}
+    <p class="text-muted">No file attached yet.</p>
+{% endif %}
+<form method="post" enctype="multipart/form-data">
+    {% csrf_token %}
+    {% bootstrap_form form %}
+    {% bootstrap_button "Save" button_type="submit" button_class="btn-primary" %}
+    <a href="{% url 'ledger:transaction_list' %}" class="btn btn-outline-secondary">Cancel</a>
+</form>
+{% endblock %}

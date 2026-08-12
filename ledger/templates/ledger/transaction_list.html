@@ -80,13 +80,16 @@
             </td>
             <td class="text-end text-nowrap">
                 {% if txn.transfer_as_source %}
+                    <a href="{% url 'ledger:transfer_attachment' txn.transfer_as_source.pk %}" class="btn btn-sm btn-outline-secondary">{% if txn.attachment %}Attachment{% else %}Add attachment{% endif %}</a>
                     <a href="{% url 'ledger:transfer_detail' txn.transfer_as_source.pk %}" class="btn btn-sm btn-outline-secondary">View transfer</a>
                 {% elif txn.transfer_as_destination %}
+                    <a href="{% url 'ledger:transfer_attachment' txn.transfer_as_destination.pk %}" class="btn btn-sm btn-outline-secondary">{% if txn.transfer_as_destination.attachment %}Attachment{% else %}Add attachment{% endif %}</a>
                     <a href="{% url 'ledger:transfer_detail' txn.transfer_as_destination.pk %}" class="btn btn-sm btn-outline-secondary">View transfer</a>
                 {% else %}
                     {% if not txn.account %}
                         <a href="{% url 'ledger:transaction_assign_account' txn.pk %}" class="btn btn-sm btn-outline-primary">Assign account</a>
                     {% endif %}
+                    <a href="{% url 'ledger:transaction_attachment' txn.pk %}" class="btn btn-sm btn-outline-secondary">{% if txn.attachment %}Attachment{% else %}Add attachment{% endif %}</a>
                     <a href="{% url 'ledger:transaction_update' txn.pk %}" class="btn btn-sm btn-outline-secondary">Edit</a>
                     {% if txn.executed %}
                         <form method="post" action="{% url 'ledger:transaction_unexecute' txn.pk %}" class="d-inline">

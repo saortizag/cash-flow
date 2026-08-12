@@ -6,7 +6,7 @@
 {% if transaction.executed %}
     <div class="alert alert-info">This transaction is executed — only category, description, and due date can be changed. Un-execute it first to change account, direction, or amount.</div>
 {% endif %}
-<form method="post">
+<form method="post" enctype="multipart/form-data">
     {% csrf_token %}
     {% bootstrap_form form %}
     {% bootstrap_button "Save" button_type="submit" button_class="btn-primary" %}

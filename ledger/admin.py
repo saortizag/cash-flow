@@ -35,7 +35,10 @@ class TransactionAdmin(admin.ModelAdmin):
             # A transfer leg's fields are only ever safe to change in lockstep
             # with its paired leg (services.update_transfer). Editing one side
             # here — even just description/due_date — would desync the pair.
-            readonly += ['account', 'direction', 'amount', 'category', 'description', 'due_date']
+            # attachment is included too: Transfer.attachment only ever reads
+            # from out_leg, so editing in_leg.attachment here would silently
+            # do nothing visible anywhere else in the app.
+            readonly += ['account', 'direction', 'amount', 'category', 'description', 'due_date', 'attachment']
         return readonly
 
     def has_delete_permission(self, request, obj=None):

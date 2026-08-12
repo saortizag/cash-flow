@@ -25,6 +25,9 @@ urlpatterns = [
     path('transactions/<int:pk>/execute/', views.transaction_execute, name='transaction_execute'),
     path('transactions/<int:pk>/unexecute/', views.transaction_unexecute, name='transaction_unexecute'),
     path('transactions/<int:pk>/assign-account/', views.transaction_assign_account, name='transaction_assign_account'),
+    path('transactions/<int:pk>/attachment/', views.transaction_attachment, name='transaction_attachment'),
+    path('transactions/<int:pk>/attachment/download/', views.transaction_attachment_download,
+         name='transaction_attachment_download'),
 
     path('transfers/', views.transfer_list, name='transfer_list'),
     path('transfers/new/', views.transfer_create, name='transfer_create'),
@@ -33,6 +36,9 @@ urlpatterns = [
     path('transfers/<int:pk>/delete/', views.transfer_delete, name='transfer_delete'),
     path('transfers/<int:pk>/execute/', views.transfer_execute, name='transfer_execute'),
     path('transfers/<int:pk>/unexecute/', views.transfer_unexecute, name='transfer_unexecute'),
+    path('transfers/<int:pk>/attachment/', views.transfer_attachment, name='transfer_attachment'),
+    path('transfers/<int:pk>/attachment/download/', views.transfer_attachment_download,
+         name='transfer_attachment_download'),
 
     path('recurring/', views.RecurringListView.as_view(), name='recurring_list'),
     path('recurring/new/', views.RecurringCreateView.as_view(), name='recurring_create'),

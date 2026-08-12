@@ -6,7 +6,7 @@
 {% if transfer %}
     <p class="text-muted">{{ transfer.out_leg.account.name|default:"Unassigned" }} → {{ transfer.in_leg.account.name }} — only amount, description, and due date can be changed here; both legs update together.</p>
 {% endif %}
-<form method="post">
+<form method="post" enctype="multipart/form-data">
     {% csrf_token %}
     {% bootstrap_form form %}
     {% bootstrap_button "Save" button_type="submit" button_class="btn-primary" %}
