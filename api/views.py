@@ -1,3 +1,6 @@
+import os
+
+from django.http import FileResponse, Http404
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError as DRFValidationError
@@ -12,6 +15,7 @@ from .serializers import (
     AccountSerializer,
     AccountSummarySerializer,
     AssignAccountSerializer,
+    AttachmentUploadSerializer,
     CategorySerializer,
     CreditCardBootstrapSerializer,
     CreditCardStatementSerializer,
@@ -34,6 +38,12 @@ def _transfer_for_leg(txn):
     views' module and this app deliberately doesn't import across view
     layers (only ledger.services is shared)."""
     return getattr(txn, 'transfer_as_source', None) or getattr(txn, 'transfer_as_destination', None)
+
+
+def _serve_attachment(field_file):
+    if not field_file:
+        raise Http404('No attachment.')
+    return FileResponse(field_file.open('rb'), as_attachment=True, filename=os.path.basename(field_file.name))
 
 
 class AccountViewSet(viewsets.ModelViewSet):
@@ -96,14 +106,14 @@ class TransactionViewSet(viewsets.ModelViewSet):
         serializer = ExecuteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         txn = services.execute_transaction(txn, executed_date=serializer.validated_data.get('executed_date'))
-        return Response(TransactionSerializer(txn).data)
+        return Response(TransactionSerializer(txn, context=self.get_serializer_context()).data)
 
     @action(detail=True, methods=['post'])
     def unexecute(self, request, pk=None):
         txn = self.get_object()
         self._reject_transfer_leg(txn)
         txn = services.unexecute_transaction(txn)
-        return Response(TransactionSerializer(txn).data)
+        return Response(TransactionSerializer(txn, context=self.get_serializer_context()).data)
 
     @action(detail=True, methods=['post'], url_path='assign-account')
     def assign_account(self, request, pk=None):
@@ -115,7 +125,25 @@ class TransactionViewSet(viewsets.ModelViewSet):
         serializer = AssignAccountSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         txn = services.assign_account(txn, serializer.validated_data['account'])
-        return Response(TransactionSerializer(txn).data)
+        return Response(TransactionSerializer(txn, context=self.get_serializer_context()).data)
+
+    @action(detail=True, methods=['get', 'post', 'delete'], url_path='attachment')
+    def attachment(self, request, pk=None):
+        """GET streams the file (404 if none — allowed even on a transfer leg, no reason to
+        block a read); POST sets/replaces it; DELETE clears it. Mutating a transfer leg's
+        attachment directly is blocked, same as every other mutation on a leg — manage it via
+        the transfer's own {id}/attachment/ action instead."""
+        txn = self.get_object()
+        if request.method == 'GET':
+            return _serve_attachment(txn.attachment)
+        self._reject_transfer_leg(txn)
+        if request.method == 'DELETE':
+            services.update_transaction_attachment(txn, None)
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        serializer = AttachmentUploadSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        services.update_transaction_attachment(txn, serializer.validated_data['attachment'])
+        return Response(TransactionSerializer(txn, context=self.get_serializer_context()).data)
 
 
 class RecurringTransactionViewSet(viewsets.ModelViewSet):
@@ -152,13 +180,29 @@ class TransferViewSet(viewsets.ModelViewSet):
         serializer = ExecuteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         transfer = services.execute_transfer(transfer, executed_date=serializer.validated_data.get('executed_date'))
-        return Response(TransferSerializer(transfer).data)
+        return Response(TransferSerializer(transfer, context=self.get_serializer_context()).data)
 
     @action(detail=True, methods=['post'])
     def unexecute(self, request, pk=None):
         transfer = self.get_object()
         transfer = services.unexecute_transfer(transfer)
-        return Response(TransferSerializer(transfer).data)
+        return Response(TransferSerializer(transfer, context=self.get_serializer_context()).data)
+
+    @action(detail=True, methods=['get', 'post', 'delete'], url_path='attachment')
+    def attachment(self, request, pk=None):
+        """Same GET/POST/DELETE shape as TransactionViewSet.attachment — see its docstring.
+        Always allowed regardless of executed state (services.update_transfer_attachment,
+        deliberately not services.update_transfer, which locks once executed)."""
+        transfer = self.get_object()
+        if request.method == 'GET':
+            return _serve_attachment(transfer.attachment)
+        if request.method == 'DELETE':
+            services.update_transfer_attachment(transfer, None)
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        serializer = AttachmentUploadSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        services.update_transfer_attachment(transfer, serializer.validated_data['attachment'])
+        return Response(TransferSerializer(transfer, context=self.get_serializer_context()).data)
 
 
 class CreditCardStatementViewSet(viewsets.ReadOnlyModelViewSet):
@@ -175,7 +219,8 @@ class SummaryView(APIView):
     def get(self, request):
         services.ensure_recurring_horizon_for_all_active()
         services.close_statements_if_due_for_all_cards()
-        return Response(AccountSummarySerializer(services.account_summary()).data)
+        context = {'request': request}
+        return Response(AccountSummarySerializer(services.account_summary(), context=context).data)
 
 
 class BaseProjectionView(APIView):
@@ -189,7 +234,7 @@ class BaseProjectionView(APIView):
         data = services.project_balances(
             query.validated_data['target_date'], account=query.validated_data.get('account'),
         )
-        return Response(self.serializer_class(data).data)
+        return Response(self.serializer_class(data, context={'request': request}).data)
 
 
 class ProjectionSummaryView(BaseProjectionView):

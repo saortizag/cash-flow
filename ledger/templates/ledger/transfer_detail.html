@@ -26,6 +26,14 @@
                     <span class="badge text-bg-info">Card statement payment</span>
                 {% endif %}
             </dd>
+            <dt class="col-sm-3">Attachment</dt>
+            <dd class="col-sm-9">
+                {% if transfer.attachment %}
+                    <a href="{% url 'ledger:transfer_attachment_download' transfer.pk %}">Download</a>
+                {% else %}
+                    <span class="text-muted">None</span>
+                {% endif %}
+            </dd>
         </dl>
     </div>
 </div>
@@ -41,6 +49,7 @@
             <button type="submit" class="btn btn-outline-warning">Un-execute</button>
         </form>
     {% endif %}
+    <a href="{% url 'ledger:transfer_attachment' transfer.pk %}" class="btn btn-outline-secondary">{% if transfer.attachment %}Manage attachment{% else %}Add attachment{% endif %}</a>
     {% if not transfer.out_leg.executed %}
         <a href="{% url 'ledger:transfer_update' transfer.pk %}" class="btn btn-outline-secondary">Edit</a>
         <a href="{% url 'ledger:transfer_delete' transfer.pk %}" class="btn btn-outline-danger">Delete</a>

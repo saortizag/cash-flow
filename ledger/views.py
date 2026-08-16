@@ -1,9 +1,12 @@
+import os
+
 from dateutil.relativedelta import relativedelta
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.exceptions import ValidationError
 from django.db.models import ProtectedError
+from django.http import FileResponse, Http404
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse_lazy
 from django.utils import timezone
@@ -14,6 +17,7 @@ from . import services
 from .forms import (
     AccountForm,
     AssignAccountForm,
+    AttachmentForm,
     CategoryForm,
     CreditCardBootstrapForm,
     ExecuteTransactionForm,
@@ -35,6 +39,18 @@ def _transfer_for_leg(txn):
     (which Django deliberately makes an AttributeError subclass) rather than
     returning None, so getattr(..., None) is the correct existence check."""
     return getattr(txn, 'transfer_as_source', None) or getattr(txn, 'transfer_as_destination', None)
+
+
+def _attachment_display_name(field_file):
+    """The original filename, stripped of the upload_to storage path (a random per-upload
+    directory — see models.attachment_upload_path) — what a user actually recognizes."""
+    return os.path.basename(field_file.name) if field_file else None
+
+
+def _serve_attachment(field_file):
+    if not field_file:
+        raise Http404('No attachment.')
+    return FileResponse(field_file.open('rb'), as_attachment=True, filename=_attachment_display_name(field_file))
 
 
 @login_required
@@ -159,13 +175,13 @@ def transaction_list(request):
 @login_required
 def transaction_create(request):
     if request.method == 'POST':
-        form = TransactionCreateForm(request.POST)
+        form = TransactionCreateForm(request.POST, request.FILES)
         if form.is_valid():
             cd = form.cleaned_data
             services.create_transaction(
                 account=cd['account'], category=cd['category'], direction=cd['direction'],
                 amount=cd['amount'], description=cd['description'], due_date=cd['due_date'],
-                executed=cd['executed'], executed_date=cd['executed_date'],
+                executed=cd['executed'], executed_date=cd['executed_date'], attachment=cd['attachment'],
             )
             messages.success(request, 'Transaction created.')
             return redirect('ledger:transaction_list')
@@ -283,6 +299,37 @@ def transaction_assign_account(request, pk):
     })
 
 
+@login_required
+def transaction_attachment(request, pk):
+    txn = get_object_or_404(Transaction, pk=pk)
+    transfer = _transfer_for_leg(txn)
+    if transfer:
+        return redirect('ledger:transfer_attachment', pk=transfer.pk)
+    if request.method == 'POST':
+        # initial= matters here, not just on the GET render below: FileField.clean() falls
+        # back to it when nothing was submitted, which is how "no change" is distinguished
+        # from "clear" (the ClearableFileInput checkbox, independent of initial) — see
+        # AttachmentForm's docstring.
+        form = AttachmentForm(request.POST, request.FILES, initial={'attachment': txn.attachment})
+        if form.is_valid():
+            data = form.cleaned_data['attachment']
+            if data is not None:  # None = nothing submitted, i.e. no change
+                services.update_transaction_attachment(txn, data or None)  # False (clear) -> None
+                messages.success(request, 'Attachment updated.' if data else 'Attachment removed.')
+            return redirect('ledger:transaction_list')
+    else:
+        form = AttachmentForm(initial={'attachment': txn.attachment})
+    return render(request, 'ledger/transaction_attachment.html', {
+        'form': form, 'transaction': txn, 'attachment_name': _attachment_display_name(txn.attachment),
+    })
+
+
+@login_required
+def transaction_attachment_download(request, pk):
+    txn = get_object_or_404(Transaction, pk=pk)
+    return _serve_attachment(txn.attachment)
+
+
 # ---- Transfers ----
 
 @login_required
@@ -296,13 +343,13 @@ def transfer_list(request):
 @login_required
 def transfer_create(request):
     if request.method == 'POST':
-        form = TransferCreateForm(request.POST)
+        form = TransferCreateForm(request.POST, request.FILES)
         if form.is_valid():
             cd = form.cleaned_data
             services.create_transfer(
                 from_account=cd['from_account'], to_account=cd['to_account'], amount=cd['amount'],
                 description=cd['description'], due_date=cd['due_date'],
-                executed=cd['executed'], executed_date=cd['executed_date'],
+                executed=cd['executed'], executed_date=cd['executed_date'], attachment=cd['attachment'],
             )
             messages.success(request, 'Transfer created.')
             return redirect('ledger:transfer_list')
@@ -315,6 +362,30 @@ def transfer_create(request):
 def transfer_detail(request, pk):
     transfer = get_object_or_404(Transfer, pk=pk)
     return render(request, 'ledger/transfer_detail.html', {'transfer': transfer})
+
+
+@login_required
+def transfer_attachment(request, pk):
+    transfer = get_object_or_404(Transfer, pk=pk)
+    if request.method == 'POST':
+        form = AttachmentForm(request.POST, request.FILES, initial={'attachment': transfer.attachment})
+        if form.is_valid():
+            data = form.cleaned_data['attachment']
+            if data is not None:  # None = nothing submitted, i.e. no change
+                services.update_transfer_attachment(transfer, data or None)  # False (clear) -> None
+                messages.success(request, 'Attachment updated.' if data else 'Attachment removed.')
+            return redirect('ledger:transfer_detail', pk=transfer.pk)
+    else:
+        form = AttachmentForm(initial={'attachment': transfer.attachment})
+    return render(request, 'ledger/transfer_attachment.html', {
+        'form': form, 'transfer': transfer, 'attachment_name': _attachment_display_name(transfer.attachment),
+    })
+
+
+@login_required
+def transfer_attachment_download(request, pk):
+    transfer = get_object_or_404(Transfer, pk=pk)
+    return _serve_attachment(transfer.attachment)
 
 
 @login_required

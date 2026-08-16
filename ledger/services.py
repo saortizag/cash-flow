@@ -18,6 +18,7 @@ delta. Lock ordering is always Transaction row first, then Account row, to
 avoid deadlocking against the reverse order.
 """
 
+import os
 from decimal import Decimal
 
 from dateutil.relativedelta import relativedelta
@@ -37,6 +38,20 @@ SIGN = {
 
 def signed_amount(direction, amount):
     return SIGN[direction] * amount
+
+
+def _delete_attachment_file(field_file):
+    """Removes the file AND its now-empty per-upload directory (see
+    models.attachment_upload_path — each upload gets a fresh directory holding exactly one
+    file, so removing that directory once its file is gone is always safe, never a race with
+    a sibling). Assumes local FileSystemStorage (field_file.path), consistent with this app's
+    local-first design — see cash.settings' MEDIA_ROOT comment."""
+    directory = os.path.dirname(field_file.path)
+    field_file.delete(save=False)
+    try:
+        os.rmdir(directory)
+    except OSError:
+        pass  # not empty (shouldn't happen) or already gone — either way, not fatal
 
 
 # ---------- Transaction lifecycle ----------
@@ -77,12 +92,13 @@ def unexecute_transaction(txn):
 
 @db_transaction.atomic
 def create_transaction(*, account, category, direction, amount, description, due_date,
-                        executed=False, executed_date=None, recurring_source=None):
+                        executed=False, executed_date=None, recurring_source=None, attachment=None):
     """Create a Transaction. If executed=True (logging something that already
     happened), apply the balance effect atomically as part of the same call."""
     txn = Transaction.objects.create(
         account=account, category=category, direction=direction, amount=amount,
         description=description, due_date=due_date, recurring_source=recurring_source,
+        attachment=attachment,
     )
     if executed:
         execute_transaction(txn, executed_date=executed_date)
@@ -118,12 +134,38 @@ def update_transaction_open_fields(txn, *, category, description, due_date):
     return txn
 
 
+def update_transaction_attachment(txn, attachment):
+    """Set/replace (attachment=an uploaded file) or clear (attachment=None) the optional
+    support document. Always allowed regardless of executed state — same rationale as
+    update_transaction_open_fields, and deliberately its own function rather than a parameter
+    on that one: callers here always pass an unambiguous value (a file, or None), unlike a
+    Django form's cleaned_data where a FileField's None/False/file tri-state ("no change" vs
+    "clear" vs "replace") needs translating before it gets here — keeping that translation in
+    the view/form layer, not this one, matching how AttachmentForm is the single place that
+    ambiguity gets resolved.
+
+    Deletes the PREVIOUS file from storage (not just the DB pointer) once the new value has
+    committed — FileField does not do this on save() on its own, and leaving it out would leak
+    a physical file on every replace/clear, forever. on_commit rather than an immediate delete:
+    if the surrounding request is itself inside a transaction that later rolls back, the file
+    must not vanish out from under a row that (after rollback) still points at it."""
+    old = txn.attachment
+    txn.attachment = attachment
+    txn.save(update_fields=['attachment', 'updated_at'])
+    if old:
+        db_transaction.on_commit(lambda: _delete_attachment_file(old))
+    return txn
+
+
 @db_transaction.atomic
 def delete_transaction(txn):
     locked_txn = Transaction.objects.select_for_update().get(pk=txn.pk)
     if locked_txn.executed:
         raise ValidationError('Cannot delete an executed transaction. Un-execute it first.')
+    attachment = locked_txn.attachment
     locked_txn.delete()
+    if attachment:
+        db_transaction.on_commit(lambda: _delete_attachment_file(attachment))
 
 
 # ---------- Recurring generation ----------
@@ -273,9 +315,10 @@ def assign_account(txn, account):
 
 @db_transaction.atomic
 def create_transfer(*, from_account, to_account, amount, description, due_date,
-                     executed=False, executed_date=None):
+                     executed=False, executed_date=None, attachment=None):
     out_leg = Transaction.objects.create(account=from_account, direction=Transaction.Direction.OUT,
-                                          amount=amount, description=description, due_date=due_date)
+                                          amount=amount, description=description, due_date=due_date,
+                                          attachment=attachment)
     in_leg = Transaction.objects.create(account=to_account, direction=Transaction.Direction.IN,
                                          amount=amount, description=description, due_date=due_date)
     transfer = Transfer.objects.create(out_leg=out_leg, in_leg=in_leg)
@@ -320,15 +363,26 @@ def update_transfer(transfer, *, amount, description, due_date):
     return transfer
 
 
+def update_transfer_attachment(transfer, attachment):
+    """Stored on out_leg — see Transfer.attachment property. Same always-allowed-regardless-
+    of-executed-state rationale as update_transaction_attachment; deliberately NOT part of
+    update_transfer, which is reserved for the financial fields and stays guarded by the
+    executed check (attaching a receipt after the fact shouldn't require un-executing first)."""
+    return update_transaction_attachment(transfer.out_leg, attachment)
+
+
 @db_transaction.atomic
 def delete_transfer(transfer):
     out_leg = Transaction.objects.select_for_update().get(pk=transfer.out_leg_id)
     in_leg = Transaction.objects.select_for_update().get(pk=transfer.in_leg_id)
     if out_leg.executed or in_leg.executed:
         raise ValidationError('Cannot delete an executed transfer. Un-execute it first.')
+    attachment = out_leg.attachment  # see update_transaction_attachment for why on_commit
     transfer.delete()   # delete the Transfer row first — its PROTECT references are what
     out_leg.delete()    # stop the legs from being deleted directly (by design, to block
     in_leg.delete()     # accidentally orphaning one side); once it's gone, legs delete freely.
+    if attachment:
+        db_transaction.on_commit(lambda: _delete_attachment_file(attachment))
 
 
 # ---------- Credit card statement cycling ----------

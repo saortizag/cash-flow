@@ -117,6 +117,14 @@ USE_TZ = True
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 
+# Transaction/Transfer support-file uploads. Deliberately NOT wired into urls.py as a public
+# static route (no `+ static(MEDIA_URL, ...)` helper) — these can be financial documents
+# (receipts, statements), so they're only ever served back through the authenticated
+# streaming views (ledger.views.transaction_attachment_download / transfer_attachment_download,
+# and their api.views equivalents), never a bare URL anyone with the link could fetch.
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 

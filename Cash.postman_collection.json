@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "b6a2f4d0-7e3a-4b8d-9c2f-3a1e6d8f5c90",
     "name": "Cash API",
-    "description": "Personal cash-flow tracker REST API. JWT-authenticated (djangorestframework-simplejwt), versioned at /api/v1/. Every mutation routes through ledger/services.py, so the same business rules the web UI enforces apply here too — see each request's description for the specific rule it's demonstrating.\n\nQuick start:\n1. Set the `base_url`, `username`, `password` collection variables (defaults to http://127.0.0.1:8000).\n2. Run \"Auth > Obtain Token\" — it saves the access/refresh tokens into collection variables automatically. Every other request inherits the access token via collection-level Bearer auth.\n3. Access tokens last 1 hour; run \"Auth > Refresh Token\" to get a new one without logging in again.\n4. Create requests (Accounts, Categories, Transactions, ...) save the new row's id into a collection variable (e.g. {{account_id}}) so the folder's other requests work immediately without manual edits.\n\nInteractive OpenAPI docs are always available at {{base_url}}/api/docs/.",
+    "description": "Personal cash-flow tracker REST API. JWT-authenticated (djangorestframework-simplejwt), versioned at /api/v1/. Every mutation routes through ledger/services.py, so the same business rules the web UI enforces apply here too — see each request's description for the specific rule it's demonstrating.\n\nQuick start:\n1. Set the `base_url`, `username`, `password` collection variables (defaults to http://127.0.0.1:8000).\n2. Run \"Auth > Obtain Token\" — it saves the access/refresh tokens into collection variables automatically. Every other request inherits the access token via collection-level Bearer auth.\n3. Access tokens last 1 hour; run \"Auth > Refresh Token\" to get a new one without logging in again.\n4. Create requests (Accounts, Categories, Transactions, ...) save the new row's id into a collection variable (e.g. {{account_id}}) so the folder's other requests work immediately without manual edits.\n5. Transactions and Transfers can carry one optional support file each (receipt/invoice/pdf/image/office doc, max 10MB) — see the \"Attachment\" requests in each of those folders. Files are never served from a public URL; every download goes through an authenticated action, so attachment_url in a response only ever works with your token attached.\n\nInteractive OpenAPI docs are always available at {{base_url}}/api/docs/.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -272,7 +272,7 @@
               "raw": "{\n  \"account\": {{account_id}},\n  \"category\": null,\n  \"direction\": \"OUT\",\n  \"amount\": \"50.00\",\n  \"description\": \"Weekly groceries\",\n  \"due_date\": \"2026-09-01\"\n}"
             },
             "url": { "raw": "{{base_url}}/api/v1/transactions/", "host": ["{{base_url}}"], "path": ["api", "v1", "transactions", ""] },
-            "description": "executed defaults to false — a pending transaction never affects account balance until executed. direction: IN | OUT."
+            "description": "executed defaults to false — a pending transaction never affects account balance until executed. direction: IN | OUT.\n\nTo attach a file at creation time instead of via the dedicated Set/Replace Attachment request below, switch this request's Body to form-data (Postman: Body tab -> form-data), keep these same field names/values as text fields, and add one more field named `attachment` with type File."
           },
           "event": [
             {
@@ -362,6 +362,36 @@
             "body": { "mode": "raw", "raw": "{\n  \"account\": {{account_id}}\n}" },
             "url": { "raw": "{{base_url}}/api/v1/transactions/{{unassigned_transaction_id}}/assign-account/", "host": ["{{base_url}}"], "path": ["api", "v1", "transactions", "{{unassigned_transaction_id}}", "assign-account", ""] },
             "description": "The only way to attach a funding account to a previously-unassigned transaction. Also the one action still allowed on an unassigned transfer leg (e.g. a credit-card statement's auto-generated payment obligation)."
+          }
+        },
+        {
+          "name": "Set/Replace Attachment",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "attachment", "type": "file", "src": [] }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/api/v1/transactions/{{transaction_id}}/attachment/", "host": ["{{base_url}}"], "path": ["api", "v1", "transactions", "{{transaction_id}}", "attachment", ""] },
+            "description": "Pick a file below (pdf, png/jpg/jpeg/gif/webp/heic, doc/docx, xls/xlsx, or txt — max 10MB). Sets it if none exists yet, replaces it (deleting the old file from storage) if one already does. Works regardless of executed state — attaching a receipt never touches balance or executed. 400 on a disallowed extension or an oversized file. Blocked (400) if this transaction is a transfer leg — use the Transfers folder's attachment requests instead."
+          }
+        },
+        {
+          "name": "Download Attachment",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/v1/transactions/{{transaction_id}}/attachment/", "host": ["{{base_url}}"], "path": ["api", "v1", "transactions", "{{transaction_id}}", "attachment", ""] },
+            "description": "Streams the file back with Content-Disposition: attachment — use Postman's \"Save Response\" (or \"Send and Download\") to save it. 404 if nothing is attached. This is the only way these files are ever served — there is no public /media/ URL."
+          }
+        },
+        {
+          "name": "Clear Attachment",
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{base_url}}/api/v1/transactions/{{transaction_id}}/attachment/", "host": ["{{base_url}}"], "path": ["api", "v1", "transactions", "{{transaction_id}}", "attachment", ""] },
+            "description": "Removes the attachment (204) — the physical file is deleted from storage too, not just the database reference."
           }
         },
         {
@@ -481,7 +511,7 @@
               "raw": "{\n  \"from_account\": {{account_id}},\n  \"to_account\": {{second_account_id}},\n  \"amount\": \"100.00\",\n  \"description\": \"Move to savings\",\n  \"due_date\": \"2026-09-01\"\n}"
             },
             "url": { "raw": "{{base_url}}/api/v1/transfers/", "host": ["{{base_url}}"], "path": ["api", "v1", "transfers", ""] },
-            "description": "from_account may be omitted/null (an obligation with no funding account decided yet — that's how an auto-generated credit-card payment starts out). Same account for from/to, or executed=true with no from_account, both return 400."
+            "description": "from_account may be omitted/null (an obligation with no funding account decided yet — that's how an auto-generated credit-card payment starts out). Same account for from/to, or executed=true with no from_account, both return 400.\n\nTo attach a file at creation time instead of via the dedicated Set/Replace Attachment request below, switch this request's Body to form-data (Postman: Body tab -> form-data), keep these same field names/values as text fields, and add one more field named `attachment` with type File."
           },
           "event": [
             {
@@ -520,6 +550,36 @@
           "request": {
             "method": "POST",
             "url": { "raw": "{{base_url}}/api/v1/transfers/{{transfer_id}}/unexecute/", "host": ["{{base_url}}"], "path": ["api", "v1", "transfers", "{{transfer_id}}", "unexecute", ""] }
+          }
+        },
+        {
+          "name": "Set/Replace Attachment",
+          "request": {
+            "method": "POST",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "attachment", "type": "file", "src": [] }
+              ]
+            },
+            "url": { "raw": "{{base_url}}/api/v1/transfers/{{transfer_id}}/attachment/", "host": ["{{base_url}}"], "path": ["api", "v1", "transfers", "{{transfer_id}}", "attachment", ""] },
+            "description": "Pick a file below (pdf, png/jpg/jpeg/gif/webp/heic, doc/docx, xls/xlsx, or txt — max 10MB). Works regardless of executed state — attaching proof of a transfer never touches balance. Stored on the transfer's source (out_leg) side internally, but that's transparent here."
+          }
+        },
+        {
+          "name": "Download Attachment",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{base_url}}/api/v1/transfers/{{transfer_id}}/attachment/", "host": ["{{base_url}}"], "path": ["api", "v1", "transfers", "{{transfer_id}}", "attachment", ""] },
+            "description": "Streams the file back with Content-Disposition: attachment. 404 if nothing is attached."
+          }
+        },
+        {
+          "name": "Clear Attachment",
+          "request": {
+            "method": "DELETE",
+            "url": { "raw": "{{base_url}}/api/v1/transfers/{{transfer_id}}/attachment/", "host": ["{{base_url}}"], "path": ["api", "v1", "transfers", "{{transfer_id}}", "attachment", ""] },
+            "description": "Removes the attachment (204) — the physical file is deleted from storage too, not just the database reference."
           }
         },
         {

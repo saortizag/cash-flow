@@ -3,6 +3,7 @@ __pycache__/
 *.log
 db.sqlite3
 staticfiles/
+media/
 .env
 .vscode/
 .idea/

@@ -5,19 +5,45 @@ why that module is the only sanctioned path. Nothing here talks to
 Account.current_balance or Transaction.executed directly.
 """
 
+import os
 from decimal import Decimal
 
+from django.core.validators import FileExtensionValidator
+from django.urls import reverse
 from rest_framework import serializers
 
 from ledger import services
 from ledger.models import (
+    ATTACHMENT_ALLOWED_EXTENSIONS,
     Account,
     Category,
     CreditCardStatement,
     RecurringTransaction,
     Transaction,
     Transfer,
+    validate_attachment_size,
 )
+
+ATTACHMENT_VALIDATORS = [
+    FileExtensionValidator(allowed_extensions=ATTACHMENT_ALLOWED_EXTENSIONS),
+    validate_attachment_size,
+]
+
+
+def _attachment_url(context, field_file, url_name, pk):
+    """Never expose the raw storage URL (attachment.url) — nothing serves /media/ publicly, by
+    design (see cash.settings' MEDIA_ROOT comment). Points at the authenticated download action
+    instead, absolute if a request is available in context (it always is via a ViewSet's
+    get_serializer_context(), but a nested/manually-built serializer might omit it)."""
+    if not field_file:
+        return None
+    request = context.get('request')
+    url = reverse(url_name, args=[pk])
+    return request.build_absolute_uri(url) if request else url
+
+
+def _attachment_name(field_file):
+    return os.path.basename(field_file.name) if field_file else None
 
 
 class ActiveAccountFieldMixin:
@@ -69,13 +95,15 @@ class TransactionSerializer(ActiveAccountFieldMixin, serializers.ModelSerializer
     transaction is unexecuted; see validate()/update()."""
 
     is_transfer_leg = serializers.SerializerMethodField()
+    attachment_url = serializers.SerializerMethodField()
+    attachment_name = serializers.SerializerMethodField()
 
     class Meta:
         model = Transaction
         fields = [
             'id', 'account', 'category', 'direction', 'amount', 'description',
             'due_date', 'executed', 'executed_date', 'recurring_source', 'statement',
-            'is_transfer_leg', 'created_at', 'updated_at',
+            'is_transfer_leg', 'attachment_url', 'attachment_name', 'created_at', 'updated_at',
         ]
         read_only_fields = [
             'executed', 'executed_date', 'recurring_source', 'statement',
@@ -84,6 +112,12 @@ class TransactionSerializer(ActiveAccountFieldMixin, serializers.ModelSerializer
 
     def get_is_transfer_leg(self, obj):
         return bool(getattr(obj, 'transfer_as_source', None) or getattr(obj, 'transfer_as_destination', None))
+
+    def get_attachment_url(self, obj):
+        return _attachment_url(self.context, obj.attachment, 'api:transaction-attachment', obj.pk)
+
+    def get_attachment_name(self, obj):
+        return _attachment_name(obj.attachment)
 
     def validate(self, attrs):
         if self.instance is not None and self.instance.executed:
@@ -118,9 +152,17 @@ class TransactionCreateSerializer(TransactionSerializer):
     """Create only: executed/executed_date become writable, for logging a
     transaction that already happened — matches
     ledger.forms.TransactionCreateForm. services.create_transaction itself
-    enforces "executed requires an account"."""
+    enforces "executed requires an account". attachment is writable here too
+    (attach a receipt right when logging the purchase) but — like
+    executed/executed_date — not on the base TransactionSerializer: changing
+    it afterward goes through the dedicated {id}/attachment/ action instead,
+    matching ledger.views' "changes only via a dedicated view" design."""
+
+    attachment = serializers.FileField(write_only=True, required=False, allow_null=True,
+                                        validators=ATTACHMENT_VALIDATORS)
 
     class Meta(TransactionSerializer.Meta):
+        fields = TransactionSerializer.Meta.fields + ['attachment']
         read_only_fields = ['recurring_source', 'statement', 'created_at', 'updated_at']
 
     def create(self, validated_data):
@@ -133,6 +175,7 @@ class TransactionCreateSerializer(TransactionSerializer):
             due_date=validated_data['due_date'],
             executed=validated_data.get('executed', False),
             executed_date=validated_data.get('executed_date'),
+            attachment=validated_data.get('attachment'),
         )
 
 
@@ -142,6 +185,14 @@ class ExecuteSerializer(serializers.Serializer):
 
 class AssignAccountSerializer(serializers.Serializer):
     account = serializers.PrimaryKeyRelatedField(queryset=Account.objects.filter(is_active=True))
+
+
+class AttachmentUploadSerializer(serializers.Serializer):
+    """Body for POST {id}/attachment/ on both TransactionViewSet and TransferViewSet — required
+    here (unlike the create-time field above) since posting to this action IS the request to
+    set/replace a file; clearing is its own DELETE on the same route instead of a null value, to
+    sidestep multipart/form-data having no clean way to express "null" the way JSON does."""
+    attachment = serializers.FileField(validators=ATTACHMENT_VALIDATORS)
 
 
 class RecurringTransactionSerializer(ActiveAccountFieldMixin, serializers.ModelSerializer):
@@ -192,6 +243,8 @@ class TransferSerializer(serializers.Serializer):
     due_date = serializers.DateField()
     executed = serializers.BooleanField(required=False, default=False)
     executed_date = serializers.DateField(required=False, allow_null=True)
+    attachment = serializers.FileField(write_only=True, required=False, allow_null=True,
+                                        validators=ATTACHMENT_VALIDATORS)
     out_leg_id = serializers.IntegerField(read_only=True)
     in_leg_id = serializers.IntegerField(read_only=True)
     created_at = serializers.DateTimeField(read_only=True)
@@ -206,6 +259,8 @@ class TransferSerializer(serializers.Serializer):
             'due_date': instance.out_leg.due_date,
             'executed': instance.out_leg.executed,
             'executed_date': instance.out_leg.executed_date,
+            'attachment_url': _attachment_url(self.context, instance.attachment, 'api:transfer-attachment', instance.pk),
+            'attachment_name': _attachment_name(instance.attachment),
             'out_leg_id': instance.out_leg_id,
             'in_leg_id': instance.in_leg_id,
             'created_at': instance.created_at,
@@ -233,6 +288,7 @@ class TransferSerializer(serializers.Serializer):
             due_date=validated_data['due_date'],
             executed=validated_data.get('executed', False),
             executed_date=validated_data.get('executed_date'),
+            attachment=validated_data.get('attachment'),
         )
 
 
@@ -247,7 +303,7 @@ class TransferUpdateSerializer(serializers.Serializer):
     due_date = serializers.DateField()
 
     def to_representation(self, instance):
-        return TransferSerializer(instance).data
+        return TransferSerializer(instance, context=self.context).data
 
     def update(self, instance, validated_data):
         return services.update_transfer(

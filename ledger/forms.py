@@ -1,7 +1,20 @@
 from django import forms
+from django.core.validators import FileExtensionValidator
 from django.utils import timezone
 
-from .models import Account, Category, RecurringTransaction, Transaction
+from .models import (
+    ATTACHMENT_ALLOWED_EXTENSIONS,
+    Account,
+    Category,
+    RecurringTransaction,
+    Transaction,
+    validate_attachment_size,
+)
+
+ATTACHMENT_VALIDATORS = [
+    FileExtensionValidator(allowed_extensions=ATTACHMENT_ALLOWED_EXTENSIONS),
+    validate_attachment_size,
+]
 
 
 class AccountForm(forms.ModelForm):
@@ -62,7 +75,7 @@ class TransactionCreateForm(ActiveAccountFieldMixin, forms.ModelForm):
 
     class Meta:
         model = Transaction
-        fields = ['account', 'category', 'direction', 'amount', 'description', 'due_date']
+        fields = ['account', 'category', 'direction', 'amount', 'description', 'due_date', 'attachment']
         widgets = {'due_date': forms.DateInput(attrs={'type': 'date'})}
 
     def clean(self):
@@ -130,6 +143,7 @@ class TransferCreateForm(forms.Form):
         help_text='Check this if logging a transfer that already happened.',
     )
     executed_date = forms.DateField(required=False, widget=forms.DateInput(attrs={'type': 'date'}))
+    attachment = forms.FileField(required=False, validators=ATTACHMENT_VALIDATORS)
 
     def clean(self):
         cleaned = super().clean()
@@ -155,6 +169,17 @@ class TransferEditForm(forms.Form):
 
 class TransferExecuteForm(forms.Form):
     executed_date = forms.DateField(widget=forms.DateInput(attrs={'type': 'date'}), initial=timezone.localdate)
+
+
+class AttachmentForm(forms.Form):
+    """Set/replace/clear the support file on an existing Transaction or Transfer — shared by
+    ledger.views.transaction_attachment and transfer_attachment. Deliberately a plain Form (not
+    tied to a model instance) so it works identically for both; the view passes the current
+    file in as `initial` so ClearableFileInput can render its own "clear" checkbox. On submit,
+    cleaned_data['attachment'] is None (nothing changed), False (clear checkbox ticked), or an
+    uploaded file (replace) — standard Django FileField semantics, resolved by the view before
+    calling services.update_transaction_attachment / update_transfer_attachment."""
+    attachment = forms.FileField(required=False, widget=forms.ClearableFileInput, validators=ATTACHMENT_VALIDATORS)
 
 
 class ProjectionForm(forms.Form):

@@ -1,7 +1,33 @@
+import uuid
 from decimal import Decimal
 
-from django.core.validators import MaxValueValidator, MinValueValidator
+from django.core.exceptions import ValidationError
+from django.core.validators import FileExtensionValidator, MaxValueValidator, MinValueValidator
 from django.db import models
+
+# Support-file upload (Transaction.attachment, and Transfer.attachment which proxies to
+# out_leg.attachment — see below). A conservative allow-list rather than accepting any
+# extension: unrestricted upload is a standard OWASP risk, and these files are served back
+# only through an authenticated streaming view (never a public /media/ static route — see
+# ledger.views.transaction_attachment_download), so the list only needs to keep out genuinely
+# dangerous/irrelevant types, not defend against inline-rendering XSS on its own.
+ATTACHMENT_ALLOWED_EXTENSIONS = [
+    'pdf', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'doc', 'docx', 'xls', 'xlsx', 'txt',
+]
+ATTACHMENT_MAX_SIZE_MB = 10
+
+
+def validate_attachment_size(file):
+    if file.size > ATTACHMENT_MAX_SIZE_MB * 1024 * 1024:
+        raise ValidationError(f'File too large — max {ATTACHMENT_MAX_SIZE_MB}MB.')
+
+
+def attachment_upload_path(instance, filename):
+    """A fresh random directory per upload (not the transaction's pk) so a leaked/guessed path
+    never reveals how many transactions exist, and so the original filename survives untouched
+    for the download view to hand back (no collision is possible within a directory only this
+    one upload ever writes to)."""
+    return f'support_files/{uuid.uuid4().hex}/{filename}'
 
 
 class Account(models.Model):
@@ -132,6 +158,16 @@ class Transaction(models.Model):
     # card expense was claimed into which statement, set by services.close_statement_if_due.
     statement = models.ForeignKey('CreditCardStatement', on_delete=models.SET_NULL, null=True, blank=True,
                                    related_name='claimed_expenses')
+    # Optional receipt/invoice/support document. Settable at creation; changed afterward only
+    # through services.update_transaction_attachment (web: the dedicated transaction_attachment
+    # view; API: the {id}/attachment/ action) rather than the regular edit forms/serializer —
+    # keeps Django's None="no change"/False="clear"/File="replace" FileField tri-state handling
+    # in one place instead of threaded through every edit path. Never affects balance/executed,
+    # so — unlike account/direction/amount — it stays editable regardless of executed state.
+    attachment = models.FileField(
+        upload_to=attachment_upload_path, null=True, blank=True,
+        validators=[FileExtensionValidator(allowed_extensions=ATTACHMENT_ALLOWED_EXTENSIONS), validate_attachment_size],
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -172,6 +208,14 @@ class Transfer(models.Model):
     out_leg = models.OneToOneField(Transaction, on_delete=models.PROTECT, related_name='transfer_as_source')
     in_leg = models.OneToOneField(Transaction, on_delete=models.PROTECT, related_name='transfer_as_destination')
     created_at = models.DateTimeField(auto_now_add=True)
+
+    @property
+    def attachment(self):
+        """Stored on out_leg rather than duplicated across both legs — an arbitrary but
+        consistent choice (services.update_transfer_attachment is the only writer). Read-only
+        here; assign via out_leg directly (through the service function) rather than this
+        property, so it's never ambiguous whether a plain attribute assignment persisted."""
+        return self.out_leg.attachment
 
     def __str__(self):
         source = self.out_leg.account.name if self.out_leg.account_id else 'Unassigned'
