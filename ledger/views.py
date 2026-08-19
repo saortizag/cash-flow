@@ -1,10 +1,12 @@
 import os
+from decimal import Decimal
 
 from dateutil.relativedelta import relativedelta
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.exceptions import ValidationError
+from django.core.paginator import Paginator
 from django.db.models import ProtectedError
 from django.http import FileResponse, Http404
 from django.shortcuts import get_object_or_404, redirect, render
@@ -53,11 +55,26 @@ def _serve_attachment(field_file):
     return FileResponse(field_file.open('rb'), as_attachment=True, filename=_attachment_display_name(field_file))
 
 
+def _chart_bars(periods):
+    """Adds a 0-100 height_pct to each period dict from expense_totals_by_period, scaled
+    against the max total in that series — pure presentation, so it stays out of services.py."""
+    max_total = max((p['total'] for p in periods), default=Decimal('0.00'))
+    return [
+        {**p, 'height_pct': int(p['total'] / max_total * 100) if max_total else 0}
+        for p in periods
+    ]
+
+
 @login_required
 def dashboard(request):
     services.ensure_recurring_horizon_for_all_active()
     services.close_statements_if_due_for_all_cards()
-    return render(request, 'ledger/dashboard.html', services.account_summary())
+    context = services.account_summary()
+    context['expense_charts'] = {
+        resolution: _chart_bars(services.expense_totals_by_period(resolution))
+        for resolution in ('day', 'week', 'month')
+    }
+    return render(request, 'ledger/dashboard.html', context)
 
 
 # ---- Account CRUD ----
@@ -139,6 +156,20 @@ class CategoryDeleteView(LoginRequiredMixin, DeleteView):
 
 # ---- Transaction ----
 
+# Column key -> the field(s) actually passed to order_by(). Whitelisted rather than passing
+# request.GET['sort'] straight through: order_by() accepts arbitrary field/relation lookups, so
+# an unvalidated value would let a request probe the schema or sort by an unintended column.
+TRANSACTION_SORT_FIELDS = {
+    'due_date': 'due_date',
+    'account': 'account__name',
+    'category': 'category__name',
+    'description': 'description',
+    'amount': 'amount',
+    'status': 'executed',
+}
+TRANSACTION_LIST_PAGE_SIZE = 50
+
+
 @login_required
 def transaction_list(request):
     # transfer_as_source/transfer_as_destination are select_related (not
@@ -148,7 +179,7 @@ def transaction_list(request):
     # two extra queries per row.
     qs = Transaction.objects.select_related(
         'account', 'category', 'transfer_as_source', 'transfer_as_destination',
-    ).order_by('-due_date')
+    )
 
     account_id = request.GET.get('account')
     category_id = request.GET.get('category')
@@ -165,10 +196,35 @@ def transaction_list(request):
     if direction in (Transaction.Direction.IN, Transaction.Direction.OUT):
         qs = qs.filter(direction=direction)
 
+    sort = request.GET.get('sort', 'due_date')
+    sort_column = sort.lstrip('-')
+    if sort_column not in TRANSACTION_SORT_FIELDS:
+        sort, sort_column = 'due_date', 'due_date'
+    descending = sort.startswith('-')
+    # 'id' is a stable tiebreaker on every ordering (matches Transaction.Meta.ordering's own
+    # due_date+id pattern) — without one, rows sharing a sort value could shuffle between pages
+    # as Postgres's own tie-break isn't guaranteed stable across queries.
+    qs = qs.order_by(('-' if descending else '') + TRANSACTION_SORT_FIELDS[sort_column], 'id')
+
+    paginator = Paginator(qs, TRANSACTION_LIST_PAGE_SIZE)
+    page_obj = paginator.get_page(request.GET.get('page'))
+
+    # Each column header links here: clicking the currently-sorted column toggles its direction,
+    # clicking any other column switches to it ascending.
+    sort_links = {
+        column: (('-' if not descending else '') + column) if column == sort_column else column
+        for column in TRANSACTION_SORT_FIELDS
+    }
+
     return render(request, 'ledger/transaction_list.html', {
-        'transactions': qs,
+        'page_obj': page_obj,
+        'transactions': page_obj.object_list,
         'accounts': Account.objects.filter(is_active=True),
         'categories': Category.objects.all(),
+        'current_sort': sort,
+        'current_sort_column': sort_column,
+        'current_sort_descending': descending,
+        'sort_links': sort_links,
     })
 
 

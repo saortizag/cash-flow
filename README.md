@@ -17,7 +17,9 @@ Django + PostgreSQL, server-rendered templates styled with Bootstrap
 - **Transactions** — an amount, direction (in/out), a due date, and an
   `executed` flag. A transaction only affects its account's balance once
   executed — a due date in the future (or even the past, if unexecuted)
-  never touches the balance until you say it happened.
+  never touches the balance until you say it happened. The list is
+  sortable by any column (default: due date, earliest first) and
+  paginated at 50 per page.
 - **Recurring transactions** — a template (weekly/monthly/quarterly/yearly,
   every N periods) that materializes real transaction rows on a rolling
   12-month horizon, so rent, salary, and subscriptions show up automatically
@@ -37,6 +39,9 @@ Django + PostgreSQL, server-rendered templates styled with Bootstrap
 - **Cash-flow projection** — pick a date, see current balance plus every
   still-pending transaction due by then, per account and combined, with a
   running balance at each step.
+- **Expense chart** — a bar chart of executed spending on the dashboard,
+  toggled between day/week/month resolution with a pill-button selector
+  (CSS-only, no JavaScript).
 - **Support-file attachments** — an optional receipt, invoice, or statement
   (PDF, image, or office doc, max 10MB) on any transaction or transfer.
   Stored locally and only ever served back through an authenticated
@@ -242,6 +247,37 @@ deleting an attachment also deletes the old file from disk (not just the databas
 via `transaction.on_commit`, so a rolled-back request never deletes a file a surviving row still
 points at.
 
+### The expense chart is bucketed in Python, not the database
+
+`services.expense_totals_by_period(resolution)` sums executed, `OUT`-direction transactions
+into day/week/month buckets — a fixed trailing window per resolution (30 days / 12 weeks / 12
+months) ending today, zero-filled so a quiet day still shows as an empty bar rather than
+shifting the spacing. Two choices worth knowing:
+- Bucketed by **`executed_date`** (when the money actually left), not `due_date` — this is a
+  historical spending chart, not a plan, and the two dates can differ (a bill's due date vs. the
+  day you actually paid it).
+- **Transfers are excluded.** A transfer's `OUT` leg moves money between your own accounts, it
+  isn't spending — counting it would also double-count a credit card payment on top of the
+  purchases it settles (already counted when they happened, as ordinary `OUT` transactions on
+  the card).
+
+Bucket boundaries are plain Python date math (a week starts Monday, ISO-style), not
+`TruncWeek`/`TruncMonth` — this keeps the boundary logic in one place we control and can test
+precisely, rather than depending on a database function's behavior. The day/week/month toggle on
+the dashboard is pure CSS (radio inputs + `:checked ~` sibling selectors): all three datasets
+render server-side on every load, and only one is visible at a time — no fetch, no JavaScript.
+
+### Sorting by amount sorts by magnitude, not signed value
+
+`Transaction.amount` is always stored positive (a DB constraint enforces `amount > 0`); the
+`+`/`-` shown in templates is a display-only convention driven by `direction`, not part of the
+stored value. Sorting the transaction list by Amount therefore orders by size regardless of
+in/out — e.g. a `$3,000` expense sorts before a `$4,390` one, even though the expense displays
+with a `-` and would look "smaller." Every other sortable column (due date, account, category,
+description, status) sorts on its literal field value; the sortable-column set itself is an
+explicit whitelist in `ledger.views.TRANSACTION_SORT_FIELDS`, not the raw query string — passing
+an arbitrary field name to `order_by()` would otherwise let a request probe unintended columns.
+
 ### Recurring generation and statement cycling are both self-healing
 
 Both `ensure_recurring_horizon` and `close_statement_if_due` are checked
@@ -260,10 +296,10 @@ cycle into the one that already closed).
 
 | Page | URL | What it's for |
 |---|---|---|
-| Dashboard | `/` | Assets / card debt / net worth, overdue & upcoming, unassigned obligations |
+| Dashboard | `/` | Assets / card debt / net worth, expense chart (day/week/month), overdue & upcoming, unassigned obligations |
 | Accounts | `/accounts/` | Create/edit accounts; `/accounts/credit-card-bootstrap/` records existing card debt with no itemized history |
 | Categories | `/categories/` | Tag transactions for later breakdown |
-| Transactions | `/transactions/` | Create, edit, execute/un-execute, delete, assign an account, attach a support file |
+| Transactions | `/transactions/` | Create, edit, execute/un-execute, delete, assign an account, attach a support file; sortable by column, 50 per page |
 | Transfers | `/transfers/` | Move money between two accounts, attach a support file |
 | Recurring | `/recurring/` | Templates that auto-generate future transactions |
 | Projection | `/projection/` | Pick a date, see the projected balance and what gets you there |
@@ -301,6 +337,11 @@ quick reference. A ready-to-import **[Postman collection](Cash.postman_collectio
 every endpoint below with working example bodies and a self-cleaning request order (run "Auth >
 Obtain Token" first, then anything else — see the collection's own description for details).
 
+Every list endpoint is paginated at 50 per page (`REST_FRAMEWORK.PAGE_SIZE`) — the response shape
+is `{"count": N, "next": <url or null>, "previous": <url or null>, "results": [...]}`, not a bare
+array. Request a page with `?page=N`; a page past the last one returns `404`. `/transactions/`
+defaults to `due_date` ascending (earliest first), matching the web UI's own default.
+
 | Resource | Path | Notes |
 |---|---|---|
 | Accounts | `/api/v1/accounts/` | CRUD; `POST .../{id}/bootstrap-statement/` records existing card debt |
@@ -325,18 +366,20 @@ raised by `services.py` come back as clean `400` responses instead of crashing.
 
 ```bash
 python manage.py test          # both apps
-python manage.py test ledger   # 113 tests — template views, services.py, forms
-python manage.py test api      # 69 tests — REST endpoints, auth, serializer validation
+python manage.py test ledger   # 136 tests — template views, services.py, forms
+python manage.py test api      # 74 tests — REST endpoints, auth, serializer validation
 ```
 
-182 tests total, focused on the highest-risk logic: balance-mutation atomicity and
+210 tests total, focused on the highest-risk logic: balance-mutation atomicity and
 concurrency safety, recurring-generation date math (including month-end
 edge cases), credit-card statement claiming and cut-date seeding, transfer
 all-or-nothing execution, unassigned-payment projection accuracy, attachment
-validation/storage-cleanup/auth-gating, and — on the API side — that the same
-business rules and numbers hold through JSON (auth, field-locking on executed
-transactions, transfer-leg guards, and summary/projection figures matching
-`services.py` called directly). Run this before trusting any change to `services.py`.
+validation/storage-cleanup/auth-gating, expense-chart bucketing (zero-fill,
+transfer/income exclusion, executed_date vs. due_date), transaction-list sorting/
+pagination, and — on the API side — that the same business rules and numbers hold
+through JSON (auth, field-locking on executed transactions, transfer-leg guards,
+pagination envelopes, and summary/projection figures matching `services.py` called
+directly). Run this before trusting any change to `services.py`.
 
 Optional: `python manage.py generate_recurring_occurrences` /
 `--horizon-months N` runs the same recurring sweep as a management command,

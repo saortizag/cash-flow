@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -94,3 +94,97 @@ class RecurringAdminRoutingRegressionTests(TestCase):
 
         self.assertFalse(Transaction.objects.filter(pk__in=future_pks).exists())
         self.assertFalse(RecurringTransaction.objects.filter(pk=self.recurring.pk).exists())
+
+
+class TransactionListSortingTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='tester', password='pw12345!')
+        self.client.force_login(self.user)
+        self.account = Account.objects.create(name='Checking', current_balance=Decimal('1000.00'))
+        self.banana = services.create_transaction(account=self.account, category=None,
+                                                    direction=Transaction.Direction.OUT, amount=Decimal('10.00'),
+                                                    description='Banana', due_date=date(2026, 1, 3))
+        self.apple = services.create_transaction(account=self.account, category=None,
+                                                   direction=Transaction.Direction.OUT, amount=Decimal('30.00'),
+                                                   description='Apple', due_date=date(2026, 1, 1))
+        self.cherry = services.create_transaction(account=self.account, category=None,
+                                                    direction=Transaction.Direction.OUT, amount=Decimal('20.00'),
+                                                    description='Cherry', due_date=date(2026, 1, 2))
+
+    def ids(self, response):
+        return [t.pk for t in response.context['transactions']]
+
+    def test_default_sort_is_due_date_ascending(self):
+        response = self.client.get(reverse('ledger:transaction_list'))
+        self.assertEqual(self.ids(response), [self.apple.pk, self.cherry.pk, self.banana.pk])
+        self.assertEqual(response.context['current_sort_column'], 'due_date')
+        self.assertFalse(response.context['current_sort_descending'])
+
+    def test_sort_by_amount_ascending(self):
+        response = self.client.get(reverse('ledger:transaction_list'), {'sort': 'amount'})
+        self.assertEqual(self.ids(response), [self.banana.pk, self.cherry.pk, self.apple.pk])
+
+    def test_sort_by_amount_descending(self):
+        response = self.client.get(reverse('ledger:transaction_list'), {'sort': '-amount'})
+        self.assertEqual(self.ids(response), [self.apple.pk, self.cherry.pk, self.banana.pk])
+
+    def test_sort_by_description(self):
+        response = self.client.get(reverse('ledger:transaction_list'), {'sort': 'description'})
+        self.assertEqual(self.ids(response), [self.apple.pk, self.banana.pk, self.cherry.pk])
+
+    def test_unknown_sort_column_falls_back_to_default_rather_than_crashing(self):
+        response = self.client.get(reverse('ledger:transaction_list'), {'sort': 'not-a-real-column'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['current_sort_column'], 'due_date')
+
+    def test_sort_link_toggles_direction_for_the_currently_sorted_column(self):
+        response = self.client.get(reverse('ledger:transaction_list'), {'sort': 'amount'})
+        self.assertEqual(response.context['sort_links']['amount'], '-amount')
+
+    def test_sort_link_defaults_to_ascending_for_other_columns(self):
+        response = self.client.get(reverse('ledger:transaction_list'), {'sort': '-amount'})
+        self.assertEqual(response.context['sort_links']['due_date'], 'due_date')
+
+    def test_sort_by_account_and_status_do_not_crash(self):
+        for sort in ('account', '-account', 'category', 'status', '-status'):
+            response = self.client.get(reverse('ledger:transaction_list'), {'sort': sort})
+            self.assertEqual(response.status_code, 200)
+
+
+class TransactionListPaginationTests(TestCase):
+    PAGE_SIZE = 50
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='tester', password='pw12345!')
+        self.client.force_login(self.user)
+        self.account = Account.objects.create(name='Checking', current_balance=Decimal('100000.00'))
+        for i in range(75):
+            services.create_transaction(
+                account=self.account, category=None, direction=Transaction.Direction.OUT,
+                amount=Decimal('1.00'), description=f'txn {i}', due_date=date(2026, 1, 1) + timedelta(days=i),
+            )
+
+    def test_first_page_has_page_size_items(self):
+        response = self.client.get(reverse('ledger:transaction_list'))
+        self.assertEqual(len(response.context['transactions']), self.PAGE_SIZE)
+        self.assertEqual(response.context['page_obj'].paginator.num_pages, 2)
+        self.assertEqual(response.context['page_obj'].paginator.count, 75)
+
+    def test_second_page_has_remaining_items(self):
+        response = self.client.get(reverse('ledger:transaction_list'), {'page': 2})
+        self.assertEqual(len(response.context['transactions']), 25)
+
+    def test_out_of_range_page_returns_last_page_instead_of_404(self):
+        response = self.client.get(reverse('ledger:transaction_list'), {'page': 999})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['page_obj'].number, 2)
+
+    def test_non_integer_page_returns_first_page_instead_of_500(self):
+        response = self.client.get(reverse('ledger:transaction_list'), {'page': 'abc'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['page_obj'].number, 1)
+
+    def test_pagination_controls_hidden_when_everything_fits_on_one_page(self):
+        Transaction.objects.all().delete()
+        response = self.client.get(reverse('ledger:transaction_list'))
+        self.assertNotContains(response, 'Transactions pages')

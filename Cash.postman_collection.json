@@ -257,9 +257,11 @@
                 { "key": "account", "value": "{{account_id}}", "disabled": true, "description": "an account id, or the literal string 'unassigned'" },
                 { "key": "category", "value": "{{category_id}}", "disabled": true },
                 { "key": "executed", "value": "false", "description": "true | false" },
-                { "key": "direction", "value": "OUT", "disabled": true, "description": "IN | OUT" }
+                { "key": "direction", "value": "OUT", "disabled": true, "description": "IN | OUT" },
+                { "key": "page", "value": "2", "disabled": true, "description": "page number, 1-based" }
               ]
-            }
+            },
+            "description": "Ordered by due_date ascending (earliest first) by default. Paginated at 50 per page (REST_FRAMEWORK's PAGE_SIZE, applies to every list endpoint in this collection) — the response is {\"count\": N, \"next\": <url or null>, \"previous\": <url or null>, \"results\": [...]} rather than a bare array. Request a specific page with ?page=N (a page beyond the last one returns 404, not an empty list)."
           }
         },
         {

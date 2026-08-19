@@ -19,6 +19,7 @@ avoid deadlocking against the reverse order.
 """
 
 import os
+from datetime import timedelta
 from decimal import Decimal
 
 from dateutil.relativedelta import relativedelta
@@ -640,3 +641,65 @@ def project_balances(target_date, account=None):
         'unassigned_rows': unassigned_rows,
         'unassigned_total': unassigned_total,
     }
+
+
+# ---------- Expense chart ----------
+# Trailing-window size per resolution — chosen so each chart stays readable (30 bars max) rather
+# than growing unbounded with account age.
+EXPENSE_CHART_WINDOWS = {'day': 30, 'week': 12, 'month': 12}
+
+
+def _short_date_label(d):
+    return f'{d.strftime("%b")} {d.day}'
+
+
+def _month_label(d):
+    return f'{d.strftime("%b")} {d.year}'
+
+
+# Bucket keys are the period's start date (a Transaction's executed_date rounds down to it);
+# steps walk one bucket further into the past. Deliberately plain Python date math, not
+# TruncDay/TruncWeek/TruncMonth — the bucket boundary is defined in exactly one place we
+# control and can test precisely, rather than depending on a DB function's week-start/timezone
+# behavior (see the recurring-generation and cut-date helpers above for the same preference).
+_EXPENSE_CHART_BUCKETS = {
+    'day': (lambda d: d, lambda d: d - timedelta(days=1), _short_date_label),
+    'week': (lambda d: d - timedelta(days=d.weekday()), lambda d: d - timedelta(weeks=1), _short_date_label),
+    'month': (lambda d: d.replace(day=1), lambda d: d - relativedelta(months=1), _month_label),
+}
+
+
+def expense_totals_by_period(resolution, today=None):
+    """Total executed, OUT-direction spending per period for the trailing window
+    (EXPENSE_CHART_WINDOWS), oldest first, ending at today's own bucket. Zero-filled for periods
+    with no spend so bar spacing stays uniform even across a gap.
+
+    Grouped by executed_date (when the money actually left), not due_date — this is a historical
+    spending chart, not a plan, and the two can differ (a bill's due_date vs. the day it was
+    actually paid).
+
+    Transfer legs are excluded (transfer_as_source__isnull=True): a transfer's OUT leg moves
+    money between the user's own accounts, it isn't spending — counting it would also
+    double-count a credit card payment on top of the purchases it settles, since the purchases
+    were already counted as ordinary OUT transactions on the card."""
+    if resolution not in EXPENSE_CHART_WINDOWS:
+        raise ValueError(f'Unknown resolution: {resolution}')
+    today = today or timezone.localdate()
+    bucket_of, step_back, label_of = _EXPENSE_CHART_BUCKETS[resolution]
+
+    periods = []
+    cursor = bucket_of(today)
+    for _ in range(EXPENSE_CHART_WINDOWS[resolution]):
+        periods.append(cursor)
+        cursor = step_back(cursor)
+    periods.reverse()
+
+    totals = dict.fromkeys(periods, Decimal('0.00'))
+    rows = Transaction.objects.filter(
+        executed=True, direction=Transaction.Direction.OUT, transfer_as_source__isnull=True,
+        executed_date__gte=periods[0],
+    ).values_list('executed_date', 'amount')
+    for executed_date, amount in rows:
+        totals[bucket_of(executed_date)] += amount
+
+    return [{'date': period, 'label': label_of(period), 'total': totals[period]} for period in periods]

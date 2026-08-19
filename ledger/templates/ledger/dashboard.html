@@ -1,6 +1,27 @@
 {% extends "ledger/base.html" %}
 {% load ledger_extras %}
 {% block title %}Dashboard — Cash{% endblock %}
+{% block extra_head %}
+<style>
+    /* Resolution radios live at the .expense-card level (not adjacent to their labels) so the
+       ~ sibling combinator below can reach both the header labels and the chart panels from one
+       spot. That breaks Bootstrap's own .btn-check adjacent-sibling active-state styling, so the
+       active-pill highlight is reproduced by hand in the second rule block. */
+    .expense-card > input.btn-check { position: absolute; opacity: 0; pointer-events: none; }
+    .expense-chart { display: none; align-items: flex-end; gap: 3px; height: 180px; }
+    #res-day:checked ~ .card-body .expense-chart[data-panel="day"],
+    #res-week:checked ~ .card-body .expense-chart[data-panel="week"],
+    #res-month:checked ~ .card-body .expense-chart[data-panel="month"] { display: flex; }
+    #res-day:checked ~ .card-body label[for="res-day"],
+    #res-week:checked ~ .card-body label[for="res-week"],
+    #res-month:checked ~ .card-body label[for="res-month"] {
+        background-color: var(--bs-primary); color: #fff;
+    }
+    .expense-bar-wrap { flex: 1 1 0; min-width: 4px; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
+    .expense-bar { width: 100%; background-color: var(--bs-danger); border-radius: 2px 2px 0 0; min-height: 1px; }
+    .expense-bar-label { font-size: 0.65rem; color: var(--bs-secondary-color); margin-top: 2px; white-space: nowrap; }
+</style>
+{% endblock %}
 {% block content %}
 <h1 class="mb-4">Dashboard</h1>
 
@@ -28,6 +49,32 @@
                 <p class="card-text fs-3 mb-0">{{ net_worth|money }}</p>
             </div>
         </div>
+    </div>
+</div>
+
+<div class="card mb-4 expense-card">
+    <input type="radio" class="btn-check" name="expense-resolution" id="res-day" autocomplete="off" checked>
+    <input type="radio" class="btn-check" name="expense-resolution" id="res-week" autocomplete="off">
+    <input type="radio" class="btn-check" name="expense-resolution" id="res-month" autocomplete="off">
+    <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h5 class="card-title mb-0">Expenses</h5>
+            <div class="btn-group" role="group" aria-label="Chart resolution">
+                <label class="btn btn-outline-primary btn-sm rounded-pill me-1" for="res-day">Day</label>
+                <label class="btn btn-outline-primary btn-sm rounded-pill me-1" for="res-week">Week</label>
+                <label class="btn btn-outline-primary btn-sm rounded-pill" for="res-month">Month</label>
+            </div>
+        </div>
+        {% for resolution, bars in expense_charts.items %}
+            <div class="expense-chart" data-panel="{{ resolution }}">
+                {% for bar in bars %}
+                    <div class="expense-bar-wrap" title="{{ bar.label }}: {{ bar.total|money }}">
+                        <div class="expense-bar" style="height: {{ bar.height_pct }}%"></div>
+                        <div class="expense-bar-label">{{ bar.label }}</div>
+                    </div>
+                {% endfor %}
+            </div>
+        {% endfor %}
     </div>
 </div>
 
