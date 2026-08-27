@@ -160,10 +160,24 @@ class TransactionCreateSerializer(TransactionSerializer):
 
     attachment = serializers.FileField(write_only=True, required=False, allow_null=True,
                                         validators=ATTACHMENT_VALIDATORS)
+    # Not required here — services.create_transaction fills it in from executed_date when the
+    # transaction is created already-executed (see its docstring); required=True is still
+    # enforced there (raises, translated to a 400) for a not-yet-executed transaction with no
+    # due_date at all.
+    due_date = serializers.DateField(required=False)
 
     class Meta(TransactionSerializer.Meta):
         fields = TransactionSerializer.Meta.fields + ['attachment']
         read_only_fields = ['recurring_source', 'statement', 'created_at', 'updated_at']
+        # ModelSerializer auto-generates a UniqueTogetherValidator from Transaction.Meta's
+        # unique_occurrence_per_template_per_date constraint (recurring_source + due_date).
+        # Its own enforce_required_fields() forces both fields "required" on create — bypassing
+        # due_date's required=False above — regardless of the individual field's own setting.
+        # Harmless to drop here: recurring_source is read-only on this serializer (never
+        # settable via this endpoint — only services.ensure_recurring_horizon ever sets it), so
+        # there's no way to create() through here that could actually violate the constraint;
+        # the database CheckConstraint is still the real backstop either way.
+        validators = []
 
     def create(self, validated_data):
         return services.create_transaction(
@@ -172,7 +186,7 @@ class TransactionCreateSerializer(TransactionSerializer):
             direction=validated_data['direction'],
             amount=validated_data['amount'],
             description=validated_data.get('description', ''),
-            due_date=validated_data['due_date'],
+            due_date=validated_data.get('due_date'),
             executed=validated_data.get('executed', False),
             executed_date=validated_data.get('executed_date'),
             attachment=validated_data.get('attachment'),
@@ -240,7 +254,9 @@ class TransferSerializer(serializers.Serializer):
     to_account = serializers.PrimaryKeyRelatedField(queryset=Account.objects.filter(is_active=True))
     amount = serializers.DecimalField(max_digits=10, decimal_places=2, min_value=Decimal('0.01'))
     description = serializers.CharField(max_length=255, required=False, allow_blank=True, default='')
-    due_date = serializers.DateField()
+    # Not required — services.create_transfer fills it in from executed_date when the transfer
+    # is created already-executed (see create_transaction's docstring for the same rationale).
+    due_date = serializers.DateField(required=False)
     executed = serializers.BooleanField(required=False, default=False)
     executed_date = serializers.DateField(required=False, allow_null=True)
     attachment = serializers.FileField(write_only=True, required=False, allow_null=True,
@@ -285,7 +301,7 @@ class TransferSerializer(serializers.Serializer):
             to_account=validated_data['to_account'],
             amount=validated_data['amount'],
             description=validated_data.get('description', ''),
-            due_date=validated_data['due_date'],
+            due_date=validated_data.get('due_date'),
             executed=validated_data.get('executed', False),
             executed_date=validated_data.get('executed_date'),
             attachment=validated_data.get('attachment'),

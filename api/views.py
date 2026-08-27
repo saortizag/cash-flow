@@ -69,9 +69,12 @@ class CategoryViewSet(viewsets.ModelViewSet):
 
 
 class TransactionViewSet(viewsets.ModelViewSet):
+    # Ascending due_date (earliest first), 'id' tiebreak — matches the web transaction list's
+    # own default and stable-ordering rationale (see ledger.views.transaction_list). Paginated
+    # at PAGE_SIZE (50, set globally in REST_FRAMEWORK) like every other list endpoint here.
     queryset = Transaction.objects.select_related(
         'account', 'category', 'transfer_as_source', 'transfer_as_destination',
-    ).order_by('-due_date')
+    ).order_by('due_date', 'id')
     filterset_class = TransactionFilter
 
     def get_serializer_class(self):

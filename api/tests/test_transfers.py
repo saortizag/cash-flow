@@ -43,6 +43,25 @@ class TransferCRUDTests(APITestCase):
         })
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
+    def test_create_executed_without_due_date_defaults_to_executed_date(self):
+        response = self.client.post(reverse('api:transfer-list'), {
+            'from_account': self.checking.pk, 'to_account': self.savings.pk, 'amount': '100.00',
+            'description': 'move', 'executed': True, 'executed_date': '2026-01-05',
+        })
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        # TransferSerializer.to_representation() hands back the raw model value rather than
+        # going through DateField.to_representation() — a pre-existing quirk of its fully
+        # custom to_representation() (unrelated to this feature); still serializes to a proper
+        # ISO string over the wire, just not in the pre-render response.data seen in tests.
+        self.assertEqual(response.data['due_date'], date(2026, 1, 5))
+
+    def test_create_unexecuted_without_due_date_returns_400_not_500(self):
+        response = self.client.post(reverse('api:transfer-list'), {
+            'from_account': self.checking.pk, 'to_account': self.savings.pk,
+            'amount': '100.00', 'description': 'move',
+        })
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
     def test_executed_without_source_rejected(self):
         response = self.client.post(reverse('api:transfer-list'), {
             'to_account': self.savings.pk, 'amount': '100.00', 'description': 'pay',

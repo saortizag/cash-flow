@@ -19,6 +19,7 @@ avoid deadlocking against the reverse order.
 """
 
 import os
+from datetime import timedelta
 from decimal import Decimal
 
 from dateutil.relativedelta import relativedelta
@@ -91,10 +92,20 @@ def unexecute_transaction(txn):
 
 
 @db_transaction.atomic
-def create_transaction(*, account, category, direction, amount, description, due_date,
+def create_transaction(*, account, category, direction, amount, description, due_date=None,
                         executed=False, executed_date=None, recurring_source=None, attachment=None):
-    """Create a Transaction. If executed=True (logging something that already
-    happened), apply the balance effect atomically as part of the same call."""
+    """Create a Transaction. If executed=True (logging something that already happened), apply
+    the balance effect atomically as part of the same call.
+
+    due_date is required UNLESS executed=True, in which case an omitted due_date defaults to the
+    resolved executed_date (today, if executed_date itself isn't given either) — logging
+    something that already happened shouldn't also require separately typing the same date into
+    a due-date field that no longer means anything once the transaction is done. An explicitly
+    given due_date is still respected either way (e.g. "due the 1st, actually paid the 3rd")."""
+    if executed and due_date is None:
+        due_date = executed_date or timezone.localdate()
+    if due_date is None:
+        raise ValidationError('due_date is required unless the transaction is already executed.')
     txn = Transaction.objects.create(
         account=account, category=category, direction=direction, amount=amount,
         description=description, due_date=due_date, recurring_source=recurring_source,
@@ -314,8 +325,14 @@ def assign_account(txn, account):
 # outer atomic block so it's never possible to end up with only one side done.
 
 @db_transaction.atomic
-def create_transfer(*, from_account, to_account, amount, description, due_date,
+def create_transfer(*, from_account, to_account, amount, description, due_date=None,
                      executed=False, executed_date=None, attachment=None):
+    """due_date defaults from executed_date when the transfer is created already-executed and no
+    due_date is given — same rationale as create_transaction."""
+    if executed and due_date is None:
+        due_date = executed_date or timezone.localdate()
+    if due_date is None:
+        raise ValidationError('due_date is required unless the transfer is already executed.')
     out_leg = Transaction.objects.create(account=from_account, direction=Transaction.Direction.OUT,
                                           amount=amount, description=description, due_date=due_date,
                                           attachment=attachment)
@@ -640,3 +657,65 @@ def project_balances(target_date, account=None):
         'unassigned_rows': unassigned_rows,
         'unassigned_total': unassigned_total,
     }
+
+
+# ---------- Expense chart ----------
+# Trailing-window size per resolution — chosen so each chart stays readable (30 bars max) rather
+# than growing unbounded with account age.
+EXPENSE_CHART_WINDOWS = {'day': 30, 'week': 12, 'month': 12}
+
+
+def _short_date_label(d):
+    return f'{d.strftime("%b")} {d.day}'
+
+
+def _month_label(d):
+    return f'{d.strftime("%b")} {d.year}'
+
+
+# Bucket keys are the period's start date (a Transaction's executed_date rounds down to it);
+# steps walk one bucket further into the past. Deliberately plain Python date math, not
+# TruncDay/TruncWeek/TruncMonth — the bucket boundary is defined in exactly one place we
+# control and can test precisely, rather than depending on a DB function's week-start/timezone
+# behavior (see the recurring-generation and cut-date helpers above for the same preference).
+_EXPENSE_CHART_BUCKETS = {
+    'day': (lambda d: d, lambda d: d - timedelta(days=1), _short_date_label),
+    'week': (lambda d: d - timedelta(days=d.weekday()), lambda d: d - timedelta(weeks=1), _short_date_label),
+    'month': (lambda d: d.replace(day=1), lambda d: d - relativedelta(months=1), _month_label),
+}
+
+
+def expense_totals_by_period(resolution, today=None):
+    """Total executed, OUT-direction spending per period for the trailing window
+    (EXPENSE_CHART_WINDOWS), oldest first, ending at today's own bucket. Zero-filled for periods
+    with no spend so bar spacing stays uniform even across a gap.
+
+    Grouped by executed_date (when the money actually left), not due_date — this is a historical
+    spending chart, not a plan, and the two can differ (a bill's due_date vs. the day it was
+    actually paid).
+
+    Transfer legs are excluded (transfer_as_source__isnull=True): a transfer's OUT leg moves
+    money between the user's own accounts, it isn't spending — counting it would also
+    double-count a credit card payment on top of the purchases it settles, since the purchases
+    were already counted as ordinary OUT transactions on the card."""
+    if resolution not in EXPENSE_CHART_WINDOWS:
+        raise ValueError(f'Unknown resolution: {resolution}')
+    today = today or timezone.localdate()
+    bucket_of, step_back, label_of = _EXPENSE_CHART_BUCKETS[resolution]
+
+    periods = []
+    cursor = bucket_of(today)
+    for _ in range(EXPENSE_CHART_WINDOWS[resolution]):
+        periods.append(cursor)
+        cursor = step_back(cursor)
+    periods.reverse()
+
+    totals = dict.fromkeys(periods, Decimal('0.00'))
+    rows = Transaction.objects.filter(
+        executed=True, direction=Transaction.Direction.OUT, transfer_as_source__isnull=True,
+        executed_date__gte=periods[0],
+    ).values_list('executed_date', 'amount')
+    for executed_date, amount in rows:
+        totals[bucket_of(executed_date)] += amount
+
+    return [{'date': period, 'label': label_of(period), 'total': totals[period]} for period in periods]
