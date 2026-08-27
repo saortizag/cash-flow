@@ -46,6 +46,22 @@ class TransactionCreateTests(APITestCase):
         })
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
+    def test_create_executed_without_due_date_defaults_to_executed_date(self):
+        response = self.client.post(reverse('api:transaction-list'), {
+            'account': self.checking.pk, 'direction': Transaction.Direction.OUT,
+            'amount': '50.00', 'description': 'Groceries', 'executed': True,
+            'executed_date': '2026-08-20',
+        })
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual(response.data['due_date'], '2026-08-20')
+
+    def test_create_unexecuted_without_due_date_returns_400_not_500(self):
+        response = self.client.post(reverse('api:transaction-list'), {
+            'account': self.checking.pk, 'direction': Transaction.Direction.OUT,
+            'amount': '50.00', 'description': 'Groceries',
+        })
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
 
 class TransactionListFilterTests(APITestCase):
     def setUp(self):

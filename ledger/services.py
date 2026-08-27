@@ -92,10 +92,20 @@ def unexecute_transaction(txn):
 
 
 @db_transaction.atomic
-def create_transaction(*, account, category, direction, amount, description, due_date,
+def create_transaction(*, account, category, direction, amount, description, due_date=None,
                         executed=False, executed_date=None, recurring_source=None, attachment=None):
-    """Create a Transaction. If executed=True (logging something that already
-    happened), apply the balance effect atomically as part of the same call."""
+    """Create a Transaction. If executed=True (logging something that already happened), apply
+    the balance effect atomically as part of the same call.
+
+    due_date is required UNLESS executed=True, in which case an omitted due_date defaults to the
+    resolved executed_date (today, if executed_date itself isn't given either) — logging
+    something that already happened shouldn't also require separately typing the same date into
+    a due-date field that no longer means anything once the transaction is done. An explicitly
+    given due_date is still respected either way (e.g. "due the 1st, actually paid the 3rd")."""
+    if executed and due_date is None:
+        due_date = executed_date or timezone.localdate()
+    if due_date is None:
+        raise ValidationError('due_date is required unless the transaction is already executed.')
     txn = Transaction.objects.create(
         account=account, category=category, direction=direction, amount=amount,
         description=description, due_date=due_date, recurring_source=recurring_source,
@@ -315,8 +325,14 @@ def assign_account(txn, account):
 # outer atomic block so it's never possible to end up with only one side done.
 
 @db_transaction.atomic
-def create_transfer(*, from_account, to_account, amount, description, due_date,
+def create_transfer(*, from_account, to_account, amount, description, due_date=None,
                      executed=False, executed_date=None, attachment=None):
+    """due_date defaults from executed_date when the transfer is created already-executed and no
+    due_date is given — same rationale as create_transaction."""
+    if executed and due_date is None:
+        due_date = executed_date or timezone.localdate()
+    if due_date is None:
+        raise ValidationError('due_date is required unless the transfer is already executed.')
     out_leg = Transaction.objects.create(account=from_account, direction=Transaction.Direction.OUT,
                                           amount=amount, description=description, due_date=due_date,
                                           attachment=attachment)

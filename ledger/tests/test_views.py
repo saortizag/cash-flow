@@ -114,8 +114,20 @@ class TransactionListSortingTests(TestCase):
     def ids(self, response):
         return [t.pk for t in response.context['transactions']]
 
-    def test_default_sort_is_due_date_ascending(self):
+    def test_default_sort_is_most_recently_active_first(self):
         response = self.client.get(reverse('ledger:transaction_list'))
+        self.assertEqual(self.ids(response), [self.banana.pk, self.cherry.pk, self.apple.pk])
+        self.assertIsNone(response.context['current_sort_column'])
+
+    def test_default_sort_uses_executed_date_over_due_date_when_executed(self):
+        # apple is due Jan 1 but actually executed Jan 10 — recency ordering puts it FIRST (most
+        # recently active), even though its due_date is the earliest of the three.
+        services.execute_transaction(self.apple, executed_date=date(2026, 1, 10))
+        response = self.client.get(reverse('ledger:transaction_list'))
+        self.assertEqual(self.ids(response), [self.apple.pk, self.banana.pk, self.cherry.pk])
+
+    def test_due_date_column_sort_is_still_available_explicitly(self):
+        response = self.client.get(reverse('ledger:transaction_list'), {'sort': 'due_date'})
         self.assertEqual(self.ids(response), [self.apple.pk, self.cherry.pk, self.banana.pk])
         self.assertEqual(response.context['current_sort_column'], 'due_date')
         self.assertFalse(response.context['current_sort_descending'])
@@ -135,7 +147,7 @@ class TransactionListSortingTests(TestCase):
     def test_unknown_sort_column_falls_back_to_default_rather_than_crashing(self):
         response = self.client.get(reverse('ledger:transaction_list'), {'sort': 'not-a-real-column'})
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.context['current_sort_column'], 'due_date')
+        self.assertIsNone(response.context['current_sort_column'])
 
     def test_sort_link_toggles_direction_for_the_currently_sorted_column(self):
         response = self.client.get(reverse('ledger:transaction_list'), {'sort': 'amount'})
@@ -149,6 +161,66 @@ class TransactionListSortingTests(TestCase):
         for sort in ('account', '-account', 'category', 'status', '-status'):
             response = self.client.get(reverse('ledger:transaction_list'), {'sort': sort})
             self.assertEqual(response.status_code, 200)
+
+
+class TransactionListFutureVisibilityTests(TestCase):
+    """A recurring template alone generates a 12-month horizon of pending occurrences, which
+    would otherwise swamp what's meant to be a record of actual activity — future-dated pending
+    transactions are hidden by default, with an explicit way to reveal them."""
+
+    TODAY = date(2026, 3, 15)
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='tester', password='pw12345!')
+        self.client.force_login(self.user)
+        self.account = Account.objects.create(name='Checking', current_balance=Decimal('1000.00'))
+        with patch('ledger.views.timezone.localdate', return_value=self.TODAY):
+            self.past_pending = services.create_transaction(
+                account=self.account, category=None, direction=Transaction.Direction.OUT,
+                amount=Decimal('10.00'), description='overdue bill', due_date=date(2026, 3, 1))
+            self.today_pending = services.create_transaction(
+                account=self.account, category=None, direction=Transaction.Direction.OUT,
+                amount=Decimal('10.00'), description='due today', due_date=self.TODAY)
+            self.future_pending = services.create_transaction(
+                account=self.account, category=None, direction=Transaction.Direction.OUT,
+                amount=Decimal('10.00'), description='future bill', due_date=date(2026, 4, 1))
+            self.executed_with_future_due_date = services.create_transaction(
+                account=self.account, category=None, direction=Transaction.Direction.OUT,
+                amount=Decimal('10.00'), description='paid ahead', due_date=date(2026, 4, 1),
+                executed=True, executed_date=self.TODAY)
+
+    def ids(self, response):
+        return {t.pk for t in response.context['transactions']}
+
+    def get(self, **params):
+        with patch('ledger.views.timezone.localdate', return_value=self.TODAY):
+            return self.client.get(reverse('ledger:transaction_list'), params)
+
+    def test_future_pending_hidden_by_default(self):
+        response = self.get()
+        ids = self.ids(response)
+        self.assertIn(self.past_pending.pk, ids)
+        self.assertIn(self.today_pending.pk, ids)
+        self.assertNotIn(self.future_pending.pk, ids)
+        self.assertFalse(response.context['show_future'])
+        self.assertEqual(response.context['future_hidden_count'], 1)
+
+    def test_executed_transaction_with_future_due_date_is_not_hidden(self):
+        # only a PENDING transaction with a future due_date is a "plan" worth hiding — an
+        # executed one already happened, regardless of what its due_date says.
+        response = self.get()
+        self.assertIn(self.executed_with_future_due_date.pk, self.ids(response))
+
+    def test_show_future_reveals_everything(self):
+        response = self.get(future='show')
+        self.assertIn(self.future_pending.pk, self.ids(response))
+        self.assertTrue(response.context['show_future'])
+        self.assertEqual(response.context['future_hidden_count'], 0)
+
+    def test_no_banner_when_nothing_is_hidden(self):
+        Transaction.objects.filter(pk=self.future_pending.pk).delete()
+        response = self.get()
+        self.assertNotContains(response, 'Show future')
 
 
 class TransactionListPaginationTests(TestCase):

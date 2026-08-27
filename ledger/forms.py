@@ -78,12 +78,23 @@ class TransactionCreateForm(ActiveAccountFieldMixin, forms.ModelForm):
         fields = ['account', 'category', 'direction', 'amount', 'description', 'due_date', 'attachment']
         widgets = {'due_date': forms.DateInput(attrs={'type': 'date'})}
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Not required at the field level — clean() below fills it in from executed_date when
+        # the transaction is already executed, so retroactively logging something that already
+        # happened doesn't also require separately typing the same date into "due date".
+        self.fields['due_date'].required = False
+
     def clean(self):
         cleaned = super().clean()
         if cleaned.get('executed') and not cleaned.get('executed_date'):
             cleaned['executed_date'] = timezone.localdate()
         if not cleaned.get('executed'):
             cleaned['executed_date'] = None
+        if cleaned.get('executed') and not cleaned.get('due_date'):
+            cleaned['due_date'] = cleaned.get('executed_date')
+        if not cleaned.get('executed') and not cleaned.get('due_date'):
+            self.add_error('due_date', 'This field is required.')
         if cleaned.get('executed') and not cleaned.get('account'):
             self.add_error('account', 'Assign an account before marking this as already executed.')
         return cleaned
@@ -137,7 +148,7 @@ class TransferCreateForm(forms.Form):
     to_account = forms.ModelChoiceField(queryset=Account.objects.filter(is_active=True), label='To')
     amount = forms.DecimalField(max_digits=10, decimal_places=2, min_value=0.01)
     description = forms.CharField(max_length=255, required=False)
-    due_date = forms.DateField(widget=forms.DateInput(attrs={'type': 'date'}))
+    due_date = forms.DateField(required=False, widget=forms.DateInput(attrs={'type': 'date'}))
     executed = forms.BooleanField(
         required=False, label='Already executed?',
         help_text='Check this if logging a transfer that already happened.',
@@ -151,6 +162,10 @@ class TransferCreateForm(forms.Form):
             cleaned['executed_date'] = timezone.localdate()
         if not cleaned.get('executed'):
             cleaned['executed_date'] = None
+        if cleaned.get('executed') and not cleaned.get('due_date'):
+            cleaned['due_date'] = cleaned.get('executed_date')
+        if not cleaned.get('executed') and not cleaned.get('due_date'):
+            self.add_error('due_date', 'This field is required.')
         if cleaned.get('executed') and not cleaned.get('from_account'):
             self.add_error('from_account', 'Assign a source account before marking this as already executed.')
         from_account, to_account = cleaned.get('from_account'), cleaned.get('to_account')

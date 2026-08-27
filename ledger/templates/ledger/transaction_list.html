@@ -8,7 +8,8 @@
 </div>
 
 <form method="get" class="row row-cols-lg-auto g-2 align-items-center mb-4">
-    <input type="hidden" name="sort" value="{{ current_sort }}">
+    <input type="hidden" name="sort" value="{{ request.GET.sort }}">
+    <input type="hidden" name="future" value="{% if show_future %}show{% endif %}">
     <div class="col-12">
         <select name="account" class="form-select form-select-sm">
             <option value="">All accounts</option>
@@ -45,6 +46,18 @@
         <a href="{% url 'ledger:transaction_list' %}" class="btn btn-sm btn-outline-secondary">Reset</a>
     </div>
 </form>
+
+{% if show_future %}
+    <div class="alert alert-secondary py-2 px-3 d-flex justify-content-between align-items-center">
+        <span>Showing future pending transactions too.</span>
+        <a href="{% querystring future="" page=None %}" class="btn btn-sm btn-outline-secondary">Hide future</a>
+    </div>
+{% elif future_hidden_count %}
+    <div class="alert alert-secondary py-2 px-3 d-flex justify-content-between align-items-center">
+        <span>{{ future_hidden_count }} future pending transaction{{ future_hidden_count|pluralize }} hidden.</span>
+        <a href="{% querystring future="show" page=None %}" class="btn btn-sm btn-outline-secondary">Show future</a>
+    </div>
+{% endif %}
 
 <table class="table table-sm">
     <thead>

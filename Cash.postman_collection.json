@@ -290,10 +290,10 @@
             "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"account\": {{account_id}},\n  \"category\": null,\n  \"direction\": \"IN\",\n  \"amount\": \"200.00\",\n  \"description\": \"Freelance payment\",\n  \"due_date\": \"2026-08-15\",\n  \"executed\": true\n}"
+              "raw": "{\n  \"account\": {{account_id}},\n  \"category\": null,\n  \"direction\": \"IN\",\n  \"amount\": \"200.00\",\n  \"description\": \"Freelance payment\",\n  \"executed\": true,\n  \"executed_date\": \"2026-08-15\"\n}"
             },
             "url": { "raw": "{{base_url}}/api/v1/transactions/", "host": ["{{base_url}}"], "path": ["api", "v1", "transactions", ""] },
-            "description": "Logs something that already happened — applies the balance effect immediately. Requires `account` to be set (400 otherwise). `executed_date` defaults to today if omitted."
+            "description": "Logs something that already happened — applies the balance effect immediately. Requires `account` to be set (400 otherwise). `executed_date` defaults to today if omitted; `due_date` is optional here and, as shown, defaults to whatever `executed_date` resolves to — give an explicit `due_date` too if you want to record it as paid late."
           },
           "event": [
             {
@@ -513,7 +513,7 @@
               "raw": "{\n  \"from_account\": {{account_id}},\n  \"to_account\": {{second_account_id}},\n  \"amount\": \"100.00\",\n  \"description\": \"Move to savings\",\n  \"due_date\": \"2026-09-01\"\n}"
             },
             "url": { "raw": "{{base_url}}/api/v1/transfers/", "host": ["{{base_url}}"], "path": ["api", "v1", "transfers", ""] },
-            "description": "from_account may be omitted/null (an obligation with no funding account decided yet — that's how an auto-generated credit-card payment starts out). Same account for from/to, or executed=true with no from_account, both return 400.\n\nTo attach a file at creation time instead of via the dedicated Set/Replace Attachment request below, switch this request's Body to form-data (Postman: Body tab -> form-data), keep these same field names/values as text fields, and add one more field named `attachment` with type File."
+            "description": "from_account may be omitted/null (an obligation with no funding account decided yet — that's how an auto-generated credit-card payment starts out). Same account for from/to, or executed=true with no from_account, both return 400. due_date is required as shown (this transfer isn't executed yet) — but if you add \"executed\": true and \"executed_date\" instead, due_date becomes optional and defaults to executed_date.\n\nTo attach a file at creation time instead of via the dedicated Set/Replace Attachment request below, switch this request's Body to form-data (Postman: Body tab -> form-data), keep these same field names/values as text fields, and add one more field named `attachment` with type File."
           },
           "event": [
             {

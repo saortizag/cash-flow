@@ -7,7 +7,8 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.core.exceptions import ValidationError
 from django.core.paginator import Paginator
-from django.db.models import ProtectedError
+from django.db.models import ProtectedError, Q
+from django.db.models.functions import Coalesce
 from django.http import FileResponse, Http404
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse_lazy
@@ -185,6 +186,7 @@ def transaction_list(request):
     category_id = request.GET.get('category')
     executed = request.GET.get('executed')
     direction = request.GET.get('direction')
+    show_future = request.GET.get('future') == 'show'
     if account_id == 'unassigned':
         qs = qs.filter(account__isnull=True)
     elif account_id and account_id.isdigit():
@@ -196,15 +198,35 @@ def transaction_list(request):
     if direction in (Transaction.Direction.IN, Transaction.Direction.OUT):
         qs = qs.filter(direction=direction)
 
-    sort = request.GET.get('sort', 'due_date')
-    sort_column = sort.lstrip('-')
+    # Future-dated pending transactions (a plan, not something that's happened or is due yet)
+    # are hidden by default — a recurring template alone generates a 12-month horizon of these,
+    # which would otherwise swamp what's meant to be a record of actual activity. This is a time
+    # horizon, not a field-equality filter like the ones above, hence its own "future" param
+    # rather than folding into the "executed" status dropdown.
+    future_hidden_count = 0
+    if not show_future:
+        future_pending = Q(executed=False, due_date__gt=timezone.localdate())
+        future_hidden_count = qs.filter(future_pending).count()
+        qs = qs.exclude(future_pending)
+
+    sort = request.GET.get('sort')
+    sort_column = (sort or '').lstrip('-') or None
     if sort_column not in TRANSACTION_SORT_FIELDS:
-        sort, sort_column = 'due_date', 'due_date'
-    descending = sort.startswith('-')
-    # 'id' is a stable tiebreaker on every ordering (matches Transaction.Meta.ordering's own
-    # due_date+id pattern) — without one, rows sharing a sort value could shuffle between pages
-    # as Postgres's own tie-break isn't guaranteed stable across queries.
-    qs = qs.order_by(('-' if descending else '') + TRANSACTION_SORT_FIELDS[sort_column], 'id')
+        sort, sort_column = None, None
+    descending = bool(sort) and sort.startswith('-')
+
+    if sort_column:
+        # 'id' is a stable tiebreaker on every explicit-column ordering (matches
+        # Transaction.Meta.ordering's own due_date+id pattern) — without one, rows sharing a
+        # sort value could shuffle between pages as Postgres's tie-break isn't guaranteed
+        # stable across queries.
+        qs = qs.order_by(('-' if descending else '') + TRANSACTION_SORT_FIELDS[sort_column], 'id')
+    else:
+        # No explicit column chosen: most-recently-active first. executed_date for executed
+        # rows (when it actually happened) — falling back to due_date for the pending rows
+        # still shown (overdue or due today; future ones are already excluded above) — furthest
+        # in the past last.
+        qs = qs.annotate(activity_date=Coalesce('executed_date', 'due_date')).order_by('-activity_date', '-id')
 
     paginator = Paginator(qs, TRANSACTION_LIST_PAGE_SIZE)
     page_obj = paginator.get_page(request.GET.get('page'))
@@ -221,10 +243,11 @@ def transaction_list(request):
         'transactions': page_obj.object_list,
         'accounts': Account.objects.filter(is_active=True),
         'categories': Category.objects.all(),
-        'current_sort': sort,
         'current_sort_column': sort_column,
         'current_sort_descending': descending,
         'sort_links': sort_links,
+        'show_future': show_future,
+        'future_hidden_count': future_hidden_count,
     })
 
 

@@ -17,9 +17,13 @@ Django + PostgreSQL, server-rendered templates styled with Bootstrap
 - **Transactions** — an amount, direction (in/out), a due date, and an
   `executed` flag. A transaction only affects its account's balance once
   executed — a due date in the future (or even the past, if unexecuted)
-  never touches the balance until you say it happened. The list is
-  sortable by any column (default: due date, earliest first) and
-  paginated at 50 per page.
+  never touches the balance until you say it happened. Logging something
+  already executed doesn't require a separate due date — it defaults to
+  the execution date. The list defaults to most-recently-active first
+  with future-dated pending items hidden (recurring bills alone generate
+  a 12-month horizon that would otherwise swamp it) — sortable by any
+  column, paginated at 50 per page, with a one-click way to reveal the
+  hidden future items.
 - **Recurring transactions** — a template (weekly/monthly/quarterly/yearly,
   every N periods) that materializes real transaction rows on a rolling
   12-month horizon, so rent, salary, and subscriptions show up automatically
@@ -198,6 +202,15 @@ to avoid deadlocking against itself. The Django admin routes through the
 same service functions rather than editing rows directly, for the same
 reason.
 
+### An executed transaction's due date defaults to its execution date
+
+`due_date` is required unless you're logging something already executed (`services.
+create_transaction`/`create_transfer`, both `due_date=None` by default) — in that case an
+omitted due date defaults to the resolved execution date (today, if you don't give one either),
+since retroactively logging something that already happened shouldn't also require separately
+typing the same date into a due-date field that no longer plans anything. An explicit due date
+is still respected if you give one (e.g. "due the 1st, actually paid the 3rd").
+
 ### Credit cards use a negative-balance convention
 
 A credit card's `current_balance` is negative (`-450.00` = you owe 450). A
@@ -267,6 +280,22 @@ precisely, rather than depending on a database function's behavior. The day/week
 the dashboard is pure CSS (radio inputs + `:checked ~` sibling selectors): all three datasets
 render server-side on every load, and only one is visible at a time — no fetch, no JavaScript.
 
+### The transaction list defaults to recent activity, not the full plan
+
+With no explicit `?sort=` column chosen, the list orders by `executed_date` for executed rows
+(when the money actually left) falling back to `due_date` for the pending rows still shown
+(overdue or due today) — most recent first, via `Coalesce('executed_date', 'due_date')` — rather
+than any single literal column. Clicking a column header (due date, account, category,
+description, amount, status) switches to sorting by that literal field instead, ascending, and
+toggles direction on a second click; "Reset" (or just not touching `?sort=`) goes back to the
+smart default.
+
+Future-dated *pending* transactions are excluded from this view by default — recurring
+templates alone generate a 12-month horizon of these, which would otherwise dominate what's
+meant to be a record of what actually happened. An executed transaction with a future `due_date`
+is not affected (it already happened, regardless of what its due date says); a banner with a
+"Show future" link reveals everything (`?future=show`) when you do want to see the plan ahead.
+
 ### Sorting by amount sorts by magnitude, not signed value
 
 `Transaction.amount` is always stored positive (a DB constraint enforces `amount > 0`); the
@@ -299,7 +328,7 @@ cycle into the one that already closed).
 | Dashboard | `/` | Assets / card debt / net worth, expense chart (day/week/month), overdue & upcoming, unassigned obligations |
 | Accounts | `/accounts/` | Create/edit accounts; `/accounts/credit-card-bootstrap/` records existing card debt with no itemized history |
 | Categories | `/categories/` | Tag transactions for later breakdown |
-| Transactions | `/transactions/` | Create, edit, execute/un-execute, delete, assign an account, attach a support file; sortable by column, 50 per page |
+| Transactions | `/transactions/` | Create, edit, execute/un-execute, delete, assign an account, attach a support file; recent-first by default (future pending hidden, toggle to reveal), sortable by column, 50 per page |
 | Transfers | `/transfers/` | Move money between two accounts, attach a support file |
 | Recurring | `/recurring/` | Templates that auto-generate future transactions |
 | Projection | `/projection/` | Pick a date, see the projected balance and what gets you there |
@@ -353,7 +382,8 @@ defaults to `due_date` ascending (earliest first), matching the web UI's own def
 | Summary | `/api/v1/summary/` | Assets / card debt / net worth / overdue / upcoming / unassigned — the dashboard's numbers |
 | Projection | `/api/v1/projection/summary/`, `/api/v1/projection/detail/` | `?target_date=&account=`; detail adds the per-transaction running-balance rows |
 
-Same business rules as the UI apply everywhere: an executed transaction can't have its
+Same business rules as the UI apply everywhere: `due_date` is optional on create when
+`executed=true` (defaults to `executed_date`, or today); an executed transaction can't have its
 account/direction/amount changed (only category/description/due date — un-execute first);
 a transfer leg can't be edited/executed/deleted through the plain transaction endpoints (manage it
 via `/transfers/` instead — `assign-account` is the one exception, since that's how an
@@ -366,20 +396,21 @@ raised by `services.py` come back as clean `400` responses instead of crashing.
 
 ```bash
 python manage.py test          # both apps
-python manage.py test ledger   # 136 tests — template views, services.py, forms
-python manage.py test api      # 74 tests — REST endpoints, auth, serializer validation
+python manage.py test ledger   # 153 tests — template views, services.py, forms
+python manage.py test api      # 78 tests — REST endpoints, auth, serializer validation
 ```
 
-210 tests total, focused on the highest-risk logic: balance-mutation atomicity and
+231 tests total, focused on the highest-risk logic: balance-mutation atomicity and
 concurrency safety, recurring-generation date math (including month-end
 edge cases), credit-card statement claiming and cut-date seeding, transfer
 all-or-nothing execution, unassigned-payment projection accuracy, attachment
 validation/storage-cleanup/auth-gating, expense-chart bucketing (zero-fill,
 transfer/income exclusion, executed_date vs. due_date), transaction-list sorting/
-pagination, and — on the API side — that the same business rules and numbers hold
-through JSON (auth, field-locking on executed transactions, transfer-leg guards,
-pagination envelopes, and summary/projection figures matching `services.py` called
-directly). Run this before trusting any change to `services.py`.
+pagination/future-visibility, due-date auto-fill on already-executed records, and —
+on the API side — that the same business rules and numbers hold through JSON (auth,
+field-locking on executed transactions, transfer-leg guards, pagination envelopes,
+and summary/projection figures matching `services.py` called directly). Run this
+before trusting any change to `services.py`.
 
 Optional: `python manage.py generate_recurring_occurrences` /
 `--horizon-months N` runs the same recurring sweep as a management command,
