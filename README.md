@@ -392,6 +392,16 @@ raised by `services.py` come back as clean `400` responses instead of crashing.
 
 ---
 
+## AI assistant (optional)
+
+`assistant/` records transactions from a short, informal message ("14000 a checho") instead of a
+form, using a local LLM (via LangChain + Ollama — no cloud API, no cost) to extract the
+structured fields and this same REST API to record them. It's a standalone component with its
+own dependencies — see **[assistant/README.md](assistant/README.md)** for setup and an
+explanation of how it's built.
+
+---
+
 ## Testing
 
 ```bash
